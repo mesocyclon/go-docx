@@ -1,0 +1,205 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_Inline
+    tag: "wp:inline"
+    doc: "inline shape element"
+    children:
+      - name: Extent
+        tag: "wp:extent"
+        type: CT_PositiveSize2D
+        cardinality: one_and_only_one
+        successors: []
+      - name: DocPr
+        tag: "wp:docPr"
+        type: CT_NonVisualDrawingProps
+        cardinality: one_and_only_one
+        successors: []
+      - name: Graphic
+        tag: "a:graphic"
+        type: CT_GraphicalObject
+        cardinality: one_and_only_one
+        successors: []
+    attributes: []
+
+  - name: CT_Anchor
+    tag: "wp:anchor"
+    doc: "floating shape anchor element"
+    children: []
+    attributes: []
+
+  - name: CT_Picture
+    tag: "pic:pic"
+    doc: "DrawingML picture element"
+    children:
+      - name: NvPicPr
+        tag: "pic:nvPicPr"
+        type: CT_PictureNonVisual
+        cardinality: one_and_only_one
+        successors: []
+      - name: BlipFill
+        tag: "pic:blipFill"
+        type: CT_BlipFillProperties
+        cardinality: one_and_only_one
+        successors: []
+      - name: SpPr
+        tag: "pic:spPr"
+        type: CT_ShapeProperties
+        cardinality: one_and_only_one
+        successors: []
+    attributes: []
+
+  - name: CT_PictureNonVisual
+    tag: "pic:nvPicPr"
+    doc: "non-visual picture properties element"
+    children:
+      - name: CNvPr
+        tag: "pic:cNvPr"
+        type: CT_NonVisualDrawingProps
+        cardinality: one_and_only_one
+        successors: []
+    attributes: []
+
+  - name: CT_NonVisualDrawingProps
+    tag: "wp:docPr"
+    doc: "non-visual drawing properties element"
+    children: []
+    attributes:
+      - name: Id
+        attr_name: "id"
+        type: int
+        required: true
+      - name: Name
+        attr_name: "name"
+        type: string
+        required: true
+
+  - name: CT_NonVisualPictureProperties
+    tag: "pic:cNvPicPr"
+    doc: "non-visual picture-specific properties"
+    children: []
+    attributes: []
+
+  - name: CT_GraphicalObject
+    tag: "a:graphic"
+    doc: "graphical object element"
+    children:
+      - name: GraphicData
+        tag: "a:graphicData"
+        type: CT_GraphicalObjectData
+        cardinality: one_and_only_one
+        successors: []
+    attributes: []
+
+  - name: CT_GraphicalObjectData
+    tag: "a:graphicData"
+    doc: "graphical object data element"
+    children:
+      - name: Pic
+        tag: "pic:pic"
+        type: CT_Picture
+        cardinality: zero_or_one
+        successors: []
+    attributes:
+      - name: Uri
+        attr_name: "uri"
+        type: string
+        required: true
+
+  - name: CT_BlipFillProperties
+    tag: "pic:blipFill"
+    doc: "blip fill properties element"
+    children:
+      - name: Blip
+        tag: "a:blip"
+        type: CT_Blip
+        cardinality: zero_or_one
+        successors: ["a:srcRect", "a:tile", "a:stretch"]
+    attributes: []
+
+  - name: CT_Blip
+    tag: "a:blip"
+    doc: "blip element specifying image source"
+    children: []
+    attributes:
+      - name: Embed
+        attr_name: "r:embed"
+        type: string
+        required: false
+      - name: Link
+        attr_name: "r:link"
+        type: string
+        required: false
+
+  - name: CT_ShapeProperties
+    tag: "pic:spPr"
+    doc: "shape properties element"
+    children:
+      - name: Xfrm
+        tag: "a:xfrm"
+        type: CT_Transform2D
+        cardinality: zero_or_one
+        successors: ["a:custGeom", "a:prstGeom", "a:ln", "a:effectLst", "a:effectDag", "a:scene3d", "a:sp3d", "a:extLst"]
+    attributes: []
+
+  - name: CT_Transform2D
+    tag: "a:xfrm"
+    doc: "2D transform element"
+    children:
+      - name: Off
+        tag: "a:off"
+        type: CT_Point2D
+        cardinality: zero_or_one
+        successors: ["a:ext"]
+      - name: Ext
+        tag: "a:ext"
+        type: CT_PositiveSize2D
+        cardinality: zero_or_one
+        successors: []
+    attributes: []
+
+  - name: CT_PositiveSize2D
+    tag: "wp:extent"
+    doc: "positive size 2D element"
+    children: []
+    attributes:
+      - name: Cx
+        attr_name: "cx"
+        type: int64
+        required: true
+      - name: Cy
+        attr_name: "cy"
+        type: int64
+        required: true
+
+  - name: CT_Point2D
+    tag: "a:off"
+    doc: "point 2D element"
+    children: []
+    attributes:
+      - name: X
+        attr_name: "x"
+        type: int64
+        required: true
+      - name: "Y"
+        attr_name: "y"
+        type: int64
+        required: true
+
+  - name: CT_PresetGeometry2D
+    tag: "a:prstGeom"
+    doc: "preset geometry element"
+    children: []
+    attributes: []
+
+  - name: CT_RelativeRect
+    tag: "a:fillRect"
+    doc: "relative rect element"
+    children: []
+    attributes: []
+
+  - name: CT_StretchInfoProperties
+    tag: "a:stretch"
+    doc: "stretch info properties"
+    children: []
+    attributes: []

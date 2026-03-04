@@ -1,0 +1,48 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_Numbering
+    tag: "w:numbering"
+    doc: "numbering root element"
+    children:
+      - name: Num
+        tag: "w:num"
+        type: CT_Num
+        cardinality: zero_or_more
+        successors: ["w:numIdMacAtCleanup"]
+    attributes: []
+
+  - name: CT_Num
+    tag: "w:num"
+    doc: "numbering instance element"
+    children:
+      - name: AbstractNumId
+        tag: "w:abstractNumId"
+        type: CT_DecimalNumber
+        cardinality: one_and_only_one
+        successors: []
+      - name: LvlOverride
+        tag: "w:lvlOverride"
+        type: CT_NumLvl
+        cardinality: zero_or_more
+        successors: []
+    attributes:
+      - name: NumId
+        attr_name: "w:numId"
+        type: int
+        required: true
+
+  - name: CT_NumLvl
+    tag: "w:lvlOverride"
+    doc: "numbering level override element"
+    children:
+      - name: StartOverride
+        tag: "w:startOverride"
+        type: CT_DecimalNumber
+        cardinality: zero_or_one
+        successors: ["w:lvl"]
+    attributes:
+      - name: Ilvl
+        attr_name: "w:ilvl"
+        type: int
+        required: true

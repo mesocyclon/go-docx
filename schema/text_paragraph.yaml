@@ -1,0 +1,23 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_P
+    tag: "w:p"
+    doc: "paragraph element"
+    children:
+      - name: PPr
+        tag: "w:pPr"
+        type: CT_PPr
+        cardinality: zero_or_one
+        successors: ["w:hyperlink", "w:r"]
+      - name: Hyperlink
+        tag: "w:hyperlink"
+        type: CT_Hyperlink
+        cardinality: zero_or_more
+        successors: []
+      - name: R
+        tag: "w:r"
+        type: CT_R
+        cardinality: zero_or_more
+        successors: []
+    attributes: []

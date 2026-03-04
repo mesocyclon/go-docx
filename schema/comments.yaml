@@ -1,0 +1,45 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_Comments
+    tag: "w:comments"
+    doc: "comments root element"
+    children:
+      - name: Comment
+        tag: "w:comment"
+        type: CT_Comment
+        cardinality: zero_or_more
+        successors: []
+    attributes: []
+
+  - name: CT_Comment
+    tag: "w:comment"
+    doc: "comment element"
+    children:
+      - name: P
+        tag: "w:p"
+        type: CT_P
+        cardinality: zero_or_more
+        successors: []
+      - name: Tbl
+        tag: "w:tbl"
+        type: CT_Tbl
+        cardinality: zero_or_more
+        successors: []
+    attributes:
+      - name: Id
+        attr_name: "w:id"
+        type: int
+        required: true
+      - name: Author
+        attr_name: "w:author"
+        type: string
+        required: true
+      - name: Initials
+        attr_name: "w:initials"
+        type: string
+        required: false
+      - name: Date
+        attr_name: "w:date"
+        type: string
+        required: false

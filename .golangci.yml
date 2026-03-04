@@ -1,0 +1,22 @@
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - revive
+    - gosimple
+    - ineffassign
+    - unused
+    - typecheck
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+
+run:
+  timeout: 5m
+
+issues:
+  exclude-use-default: false

@@ -1,0 +1,89 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_CoreProperties
+    tag: "cp:coreProperties"
+    doc: "core properties element (Dublin Core metadata)"
+    children:
+      - name: Category
+        tag: "cp:category"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: ContentStatus
+        tag: "cp:contentStatus"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Created
+        tag: "dcterms:created"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Creator
+        tag: "dc:creator"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Description
+        tag: "dc:description"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Identifier
+        tag: "dc:identifier"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Keywords
+        tag: "cp:keywords"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Language
+        tag: "dc:language"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: LastModifiedBy
+        tag: "cp:lastModifiedBy"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: LastPrinted
+        tag: "cp:lastPrinted"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Modified
+        tag: "dcterms:modified"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Revision
+        tag: "cp:revision"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Subject
+        tag: "dc:subject"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Title
+        tag: "dc:title"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+      - name: Version
+        tag: "cp:version"
+        type: CT_CorePropText
+        cardinality: zero_or_one
+        successors: []
+    attributes: []
+
+  - name: CT_CorePropText
+    tag: "cp:text"
+    doc: "simple text holder element for core properties"
+    children: []
+    attributes: []

@@ -1,0 +1,14 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_Drawing
+    tag: "w:drawing"
+    doc: "drawing element containing DrawingML objects"
+    children: []
+    attributes: []
+
+  - name: CT_LastRenderedPageBreak
+    tag: "w:lastRenderedPageBreak"
+    doc: "last rendered page break element"
+    children: []
+    attributes: []

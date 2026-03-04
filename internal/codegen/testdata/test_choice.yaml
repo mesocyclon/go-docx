@@ -1,0 +1,38 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_SchemeClr
+    tag: "a:schemeClr"
+    doc: "scheme color"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "val"
+        type: string
+        required: true
+
+  - name: CT_SrgbClr
+    tag: "a:srgbClr"
+    doc: "sRGB color"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "val"
+        type: string
+        required: true
+
+  - name: CT_Color
+    tag: "w:color"
+    doc: "color element with choice group"
+    children: []
+    attributes: []
+    choice_groups:
+      - name: ColorChoice
+        choices:
+          - name: SchemeClr
+            tag: "a:schemeClr"
+            type: CT_SchemeClr
+          - name: SrgbClr
+            tag: "a:srgbClr"
+            type: CT_SrgbClr
+        successors: []

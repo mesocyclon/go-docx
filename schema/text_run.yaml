@@ -1,0 +1,77 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_R
+    tag: "w:r"
+    doc: "run element"
+    children:
+      - name: RPr
+        tag: "w:rPr"
+        type: CT_RPr
+        cardinality: zero_or_one
+        successors: ["w:br", "w:cr", "w:drawing", "w:noBreakHyphen", "w:ptab", "w:t", "w:tab"]
+      - name: Br
+        tag: "w:br"
+        type: CT_Br
+        cardinality: zero_or_more
+        successors: []
+      - name: Cr
+        tag: "w:cr"
+        type: CT_Cr
+        cardinality: zero_or_more
+        successors: []
+      - name: Drawing
+        tag: "w:drawing"
+        type: CT_Drawing
+        cardinality: zero_or_more
+        successors: []
+      - name: T
+        tag: "w:t"
+        type: CT_Text
+        cardinality: zero_or_more
+        successors: []
+      - name: Tab
+        tag: "w:tab"
+        type: CT_TabStop
+        cardinality: zero_or_more
+        successors: []
+    attributes: []
+
+  - name: CT_Br
+    tag: "w:br"
+    doc: "break element"
+    children: []
+    attributes:
+      - name: Type
+        attr_name: "w:type"
+        type: string
+        required: false
+        default: "\"textWrapping\""
+      - name: Clear
+        attr_name: "w:clear"
+        type: string
+        required: false
+
+  - name: CT_Cr
+    tag: "w:cr"
+    doc: "carriage return element"
+    children: []
+    attributes: []
+
+  - name: CT_NoBreakHyphen
+    tag: "w:noBreakHyphen"
+    doc: "non-breaking hyphen element"
+    children: []
+    attributes: []
+
+  - name: CT_PTab
+    tag: "w:ptab"
+    doc: "absolute position tab element"
+    children: []
+    attributes: []
+
+  - name: CT_Text
+    tag: "w:t"
+    doc: "text element"
+    children: []
+    attributes: []

@@ -1,0 +1,168 @@
+package: oxml
+imports:
+  - "github.com/vortex/go-docx/pkg/docx/enum"
+elements:
+  - name: CT_PPr
+    tag: "w:pPr"
+    doc: "paragraph properties element"
+    children:
+      - name: PStyle
+        tag: "w:pStyle"
+        type: CT_String
+        cardinality: zero_or_one
+        successors: ["w:keepNext", "w:keepLines", "w:pageBreakBefore", "w:framePr", "w:widowControl", "w:numPr", "w:suppressLineNumbers", "w:pBdr", "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap", "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN", "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: KeepNext
+        tag: "w:keepNext"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:keepLines", "w:pageBreakBefore", "w:framePr", "w:widowControl", "w:numPr", "w:suppressLineNumbers", "w:pBdr", "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap", "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN", "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: KeepLines
+        tag: "w:keepLines"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:pageBreakBefore", "w:framePr", "w:widowControl", "w:numPr", "w:suppressLineNumbers", "w:pBdr", "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap", "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN", "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: PageBreakBefore
+        tag: "w:pageBreakBefore"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:framePr", "w:widowControl", "w:numPr", "w:suppressLineNumbers", "w:pBdr", "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap", "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN", "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: WidowControl
+        tag: "w:widowControl"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:numPr", "w:suppressLineNumbers", "w:pBdr", "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap", "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN", "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: NumPr
+        tag: "w:numPr"
+        type: CT_NumPr
+        cardinality: zero_or_one
+        successors: ["w:suppressLineNumbers", "w:pBdr", "w:shd", "w:tabs", "w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap", "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN", "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: Tabs
+        tag: "w:tabs"
+        type: CT_TabStops
+        cardinality: zero_or_one
+        successors: ["w:suppressAutoHyphens", "w:kinsoku", "w:wordWrap", "w:overflowPunct", "w:topLinePunct", "w:autoSpaceDE", "w:autoSpaceDN", "w:bidi", "w:adjustRightInd", "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: Spacing
+        tag: "w:spacing"
+        type: CT_Spacing
+        cardinality: zero_or_one
+        successors: ["w:ind", "w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: Ind
+        tag: "w:ind"
+        type: CT_Ind
+        cardinality: zero_or_one
+        successors: ["w:contextualSpacing", "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: Jc
+        tag: "w:jc"
+        type: CT_Jc
+        cardinality: zero_or_one
+        successors: ["w:textDirection", "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: OutlineLvl
+        tag: "w:outlineLvl"
+        type: CT_DecimalNumber
+        cardinality: zero_or_one
+        successors: ["w:divId", "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange"]
+      - name: SectPr
+        tag: "w:sectPr"
+        type: CT_SectPr
+        cardinality: zero_or_one
+        successors: ["w:pPrChange"]
+    attributes: []
+
+  - name: CT_Ind
+    tag: "w:ind"
+    doc: "indentation element"
+    children: []
+    attributes:
+      - name: Left
+        attr_name: "w:left"
+        type: int
+        required: false
+      - name: Right
+        attr_name: "w:right"
+        type: int
+        required: false
+      - name: FirstLine
+        attr_name: "w:firstLine"
+        type: int
+        required: false
+      - name: Hanging
+        attr_name: "w:hanging"
+        type: int
+        required: false
+
+  - name: CT_Jc
+    tag: "w:jc"
+    doc: "justification element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: enum.WdParagraphAlignment
+        required: true
+
+  - name: CT_Spacing
+    tag: "w:spacing"
+    doc: "spacing element"
+    children: []
+    attributes:
+      - name: After
+        attr_name: "w:after"
+        type: int
+        required: false
+      - name: Before
+        attr_name: "w:before"
+        type: int
+        required: false
+      - name: Line
+        attr_name: "w:line"
+        type: int
+        required: false
+      - name: LineRule
+        attr_name: "w:lineRule"
+        type: string
+        required: false
+
+  - name: CT_TabStop
+    tag: "w:tab"
+    doc: "tab stop element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: enum.WdTabAlignment
+        required: true
+      - name: Leader
+        attr_name: "w:leader"
+        type: enum.WdTabLeader
+        required: false
+      - name: Pos
+        attr_name: "w:pos"
+        type: int
+        required: true
+
+  - name: CT_TabStops
+    tag: "w:tabs"
+    doc: "tab stops container element"
+    children:
+      - name: Tab
+        tag: "w:tab"
+        type: CT_TabStop
+        cardinality: one_or_more
+        successors: []
+    attributes: []
+
+  - name: CT_NumPr
+    tag: "w:numPr"
+    doc: "numbering properties element"
+    children:
+      - name: Ilvl
+        tag: "w:ilvl"
+        type: CT_DecimalNumber
+        cardinality: zero_or_one
+        successors: ["w:numId", "w:numberingChange", "w:ins"]
+      - name: NumId
+        tag: "w:numId"
+        type: CT_DecimalNumber
+        cardinality: zero_or_one
+        successors: ["w:numberingChange", "w:ins"]
+    attributes: []

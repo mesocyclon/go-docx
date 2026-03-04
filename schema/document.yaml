@@ -1,0 +1,34 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_Document
+    tag: "w:document"
+    doc: "document root element"
+    children:
+      - name: Body
+        tag: "w:body"
+        type: CT_Body
+        cardinality: zero_or_one
+        successors: []
+    attributes: []
+
+  - name: CT_Body
+    tag: "w:body"
+    doc: "document body element"
+    children:
+      - name: P
+        tag: "w:p"
+        type: CT_P
+        cardinality: zero_or_more
+        successors: ["w:sectPr"]
+      - name: Tbl
+        tag: "w:tbl"
+        type: CT_Tbl
+        cardinality: zero_or_more
+        successors: ["w:sectPr"]
+      - name: SectPr
+        tag: "w:sectPr"
+        type: CT_SectPr
+        cardinality: zero_or_one
+        successors: []
+    attributes: []

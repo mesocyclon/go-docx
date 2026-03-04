@@ -1,0 +1,211 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_RPr
+    tag: "w:rPr"
+    doc: "run properties element"
+    children:
+      - name: RStyle
+        tag: "w:rStyle"
+        type: CT_String
+        cardinality: zero_or_one
+        successors: ["w:rFonts", "w:b", "w:bCs", "w:i", "w:iCs", "w:caps", "w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: RFonts
+        tag: "w:rFonts"
+        type: CT_Fonts
+        cardinality: zero_or_one
+        successors: ["w:b", "w:bCs", "w:i", "w:iCs", "w:caps", "w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: B
+        tag: "w:b"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:bCs", "w:i", "w:iCs", "w:caps", "w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: BCs
+        tag: "w:bCs"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:i", "w:iCs", "w:caps", "w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: I
+        tag: "w:i"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:iCs", "w:caps", "w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: ICs
+        tag: "w:iCs"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:caps", "w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Caps
+        tag: "w:caps"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:smallCaps", "w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: SmallCaps
+        tag: "w:smallCaps"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:strike", "w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Strike
+        tag: "w:strike"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:dstrike", "w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Dstrike
+        tag: "w:dstrike"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:outline", "w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Outline
+        tag: "w:outline"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:shadow", "w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Shadow
+        tag: "w:shadow"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:emboss", "w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Emboss
+        tag: "w:emboss"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:imprint", "w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Imprint
+        tag: "w:imprint"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:noProof", "w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: NoProof
+        tag: "w:noProof"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:snapToGrid", "w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: SnapToGrid
+        tag: "w:snapToGrid"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:vanish", "w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Vanish
+        tag: "w:vanish"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:webHidden", "w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: WebHidden
+        tag: "w:webHidden"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:color", "w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Color
+        tag: "w:color"
+        type: CT_Color
+        cardinality: zero_or_one
+        successors: ["w:spacing", "w:w", "w:kern", "w:position", "w:sz", "w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Sz
+        tag: "w:sz"
+        type: CT_HpsMeasure
+        cardinality: zero_or_one
+        successors: ["w:szCs", "w:highlight", "w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Highlight
+        tag: "w:highlight"
+        type: CT_Highlight
+        cardinality: zero_or_one
+        successors: ["w:u", "w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: U
+        tag: "w:u"
+        type: CT_Underline
+        cardinality: zero_or_one
+        successors: ["w:effect", "w:bdr", "w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: VertAlign
+        tag: "w:vertAlign"
+        type: CT_VerticalAlignRun
+        cardinality: zero_or_one
+        successors: ["w:rtl", "w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Rtl
+        tag: "w:rtl"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:cs", "w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: Cs
+        tag: "w:cs"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:em", "w:lang", "w:eastAsianLayout", "w:specVanish", "w:oMath"]
+      - name: SpecVanish
+        tag: "w:specVanish"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:oMath"]
+      - name: OMath
+        tag: "w:oMath"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: []
+    attributes: []
+
+  - name: CT_Color
+    tag: "w:color"
+    doc: "color element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: string
+        required: true
+      - name: ThemeColor
+        attr_name: "w:themeColor"
+        type: string
+        required: false
+
+  - name: CT_Fonts
+    tag: "w:rFonts"
+    doc: "run fonts element"
+    children: []
+    attributes:
+      - name: Ascii
+        attr_name: "w:ascii"
+        type: string
+        required: false
+      - name: HAnsi
+        attr_name: "w:hAnsi"
+        type: string
+        required: false
+
+  - name: CT_Highlight
+    tag: "w:highlight"
+    doc: "highlight color element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: string
+        required: true
+
+  - name: CT_HpsMeasure
+    tag: "w:sz"
+    doc: "half-point size measure element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: int64
+        required: true
+
+  - name: CT_Underline
+    tag: "w:u"
+    doc: "underline element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: string
+        required: false
+
+  - name: CT_VerticalAlignRun
+    tag: "w:vertAlign"
+    doc: "vertical align run element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: string
+        required: true

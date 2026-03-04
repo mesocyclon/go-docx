@@ -1,0 +1,26 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_Hyperlink
+    tag: "w:hyperlink"
+    doc: "hyperlink element"
+    children:
+      - name: R
+        tag: "w:r"
+        type: CT_R
+        cardinality: zero_or_more
+        successors: []
+    attributes:
+      - name: RId
+        attr_name: "r:id"
+        type: string
+        required: false
+      - name: Anchor
+        attr_name: "w:anchor"
+        type: string
+        required: false
+      - name: History
+        attr_name: "w:history"
+        type: bool
+        required: false
+        default: "true"

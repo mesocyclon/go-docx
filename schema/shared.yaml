@@ -1,0 +1,33 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_DecimalNumber
+    tag: "w:decimalNumber"
+    doc: "decimal number element used for w:numId, w:ilvl, w:abstractNumId, w:gridSpan, etc."
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: int
+        required: true
+
+  - name: CT_OnOff
+    tag: "w:onOff"
+    doc: "on/off element used for w:b, w:i, w:caps, etc. Defaults to true."
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: bool
+        required: false
+        default: "true"
+
+  - name: CT_String
+    tag: "w:string"
+    doc: "string element used for w:pStyle, w:tblStyle, w:rStyle, etc."
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: string
+        required: true

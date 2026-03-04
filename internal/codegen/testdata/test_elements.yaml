@@ -1,0 +1,77 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_PPr
+    tag: "w:pPr"
+    doc: "paragraph properties"
+    children: []
+    attributes: []
+
+  - name: CT_R
+    tag: "w:r"
+    doc: "run element"
+    children: []
+    attributes: []
+
+  - name: CT_Hyperlink
+    tag: "w:hyperlink"
+    doc: "hyperlink element"
+    children: []
+    attributes: []
+
+  - name: CT_Body
+    tag: "w:body"
+    doc: "document body element"
+    children: []
+    attributes: []
+
+  - name: CT_P
+    tag: "w:p"
+    doc: "paragraph element"
+    children:
+      - name: PPr
+        tag: "w:pPr"
+        type: CT_PPr
+        cardinality: zero_or_one
+        successors: ["w:r", "w:hyperlink"]
+      - name: R
+        tag: "w:r"
+        type: CT_R
+        cardinality: zero_or_more
+        successors: ["w:hyperlink"]
+      - name: Hyperlink
+        tag: "w:hyperlink"
+        type: CT_Hyperlink
+        cardinality: zero_or_more
+        successors: []
+    attributes:
+      - name: RsidR
+        attr_name: "w:rsidR"
+        type: string
+        required: false
+      - name: RsidRDefault
+        attr_name: "w:rsidRDefault"
+        type: string
+        required: false
+
+  - name: CT_Document
+    tag: "w:document"
+    doc: "document root element"
+    children:
+      - name: Body
+        tag: "w:body"
+        type: CT_Body
+        cardinality: one_and_only_one
+        successors: []
+    attributes: []
+
+  - name: CT_Tc
+    tag: "w:tc"
+    doc: "table cell element"
+    children:
+      - name: P
+        tag: "w:p"
+        type: CT_P
+        cardinality: one_or_more
+        successors: []
+    attributes: []

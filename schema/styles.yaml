@@ -1,0 +1,155 @@
+package: oxml
+imports: []
+elements:
+  - name: CT_Styles
+    tag: "w:styles"
+    doc: "styles root element"
+    children:
+      - name: LatentStyles
+        tag: "w:latentStyles"
+        type: CT_LatentStyles
+        cardinality: zero_or_one
+        successors: ["w:style"]
+      - name: Style
+        tag: "w:style"
+        type: CT_Style
+        cardinality: zero_or_more
+        successors: []
+    attributes: []
+
+  - name: CT_Style
+    tag: "w:style"
+    doc: "style definition element"
+    children:
+      - name: Name
+        tag: "w:name"
+        type: CT_String
+        cardinality: zero_or_one
+        successors: ["w:aliases", "w:basedOn", "w:next", "w:link", "w:autoRedefine", "w:hidden", "w:uiPriority", "w:semiHidden", "w:unhideWhenUsed", "w:qFormat", "w:locked", "w:personal", "w:personalCompose", "w:personalReply", "w:rsid", "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: BasedOn
+        tag: "w:basedOn"
+        type: CT_String
+        cardinality: zero_or_one
+        successors: ["w:next", "w:link", "w:autoRedefine", "w:hidden", "w:uiPriority", "w:semiHidden", "w:unhideWhenUsed", "w:qFormat", "w:locked", "w:personal", "w:personalCompose", "w:personalReply", "w:rsid", "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: Next
+        tag: "w:next"
+        type: CT_String
+        cardinality: zero_or_one
+        successors: ["w:link", "w:autoRedefine", "w:hidden", "w:uiPriority", "w:semiHidden", "w:unhideWhenUsed", "w:qFormat", "w:locked", "w:personal", "w:personalCompose", "w:personalReply", "w:rsid", "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: UiPriority
+        tag: "w:uiPriority"
+        type: CT_DecimalNumber
+        cardinality: zero_or_one
+        successors: ["w:semiHidden", "w:unhideWhenUsed", "w:qFormat", "w:locked", "w:personal", "w:personalCompose", "w:personalReply", "w:rsid", "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: SemiHidden
+        tag: "w:semiHidden"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:unhideWhenUsed", "w:qFormat", "w:locked", "w:personal", "w:personalCompose", "w:personalReply", "w:rsid", "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: UnhideWhenUsed
+        tag: "w:unhideWhenUsed"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:qFormat", "w:locked", "w:personal", "w:personalCompose", "w:personalReply", "w:rsid", "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: QFormat
+        tag: "w:qFormat"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:locked", "w:personal", "w:personalCompose", "w:personalReply", "w:rsid", "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: Locked
+        tag: "w:locked"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:personal", "w:personalCompose", "w:personalReply", "w:rsid", "w:pPr", "w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: PPr
+        tag: "w:pPr"
+        type: CT_PPr
+        cardinality: zero_or_one
+        successors: ["w:rPr", "w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+      - name: RPr
+        tag: "w:rPr"
+        type: CT_RPr
+        cardinality: zero_or_one
+        successors: ["w:tblPr", "w:trPr", "w:tcPr", "w:tblStylePr"]
+    attributes:
+      - name: Type
+        attr_name: "w:type"
+        type: string
+        required: false
+      - name: StyleId
+        attr_name: "w:styleId"
+        type: string
+        required: false
+      - name: Default
+        attr_name: "w:default"
+        type: bool
+        required: false
+      - name: CustomStyle
+        attr_name: "w:customStyle"
+        type: bool
+        required: false
+
+  - name: CT_LatentStyles
+    tag: "w:latentStyles"
+    doc: "latent styles element"
+    children:
+      - name: LsdException
+        tag: "w:lsdException"
+        type: CT_LsdException
+        cardinality: zero_or_more
+        successors: []
+    attributes:
+      - name: Count
+        attr_name: "w:count"
+        type: int
+        required: false
+      - name: DefLockedState
+        attr_name: "w:defLockedState"
+        type: bool
+        required: false
+      - name: DefQFormat
+        attr_name: "w:defQFormat"
+        type: bool
+        required: false
+      - name: DefSemiHidden
+        attr_name: "w:defSemiHidden"
+        type: bool
+        required: false
+      - name: DefUIPriority
+        attr_name: "w:defUIPriority"
+        type: int
+        required: false
+      - name: DefUnhideWhenUsed
+        attr_name: "w:defUnhideWhenUsed"
+        type: bool
+        required: false
+
+  - name: CT_LsdException
+    tag: "w:lsdException"
+    doc: "latent style exception element"
+    children: []
+    attributes:
+      - name: Name
+        attr_name: "w:name"
+        type: string
+        required: true
+      - name: Locked
+        attr_name: "w:locked"
+        type: bool
+        required: false
+      - name: QFormat
+        attr_name: "w:qFormat"
+        type: bool
+        required: false
+      - name: SemiHidden
+        attr_name: "w:semiHidden"
+        type: bool
+        required: false
+      - name: UiPriority
+        attr_name: "w:uiPriority"
+        type: int
+        required: false
+      - name: UnhideWhenUsed
+        attr_name: "w:unhideWhenUsed"
+        type: bool
+        required: false

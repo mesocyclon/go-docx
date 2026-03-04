@@ -1,0 +1,225 @@
+package: oxml
+imports:
+  - "github.com/vortex/go-docx/pkg/docx/enum"
+elements:
+  - name: CT_Tbl
+    tag: "w:tbl"
+    doc: "table element"
+    children:
+      - name: TblPr
+        tag: "w:tblPr"
+        type: CT_TblPr
+        cardinality: one_and_only_one
+        successors: []
+      - name: TblGrid
+        tag: "w:tblGrid"
+        type: CT_TblGrid
+        cardinality: one_and_only_one
+        successors: []
+      - name: Tr
+        tag: "w:tr"
+        type: CT_Row
+        cardinality: zero_or_more
+        successors: []
+    attributes: []
+
+  - name: CT_Row
+    tag: "w:tr"
+    doc: "table row element"
+    children:
+      - name: TblPrEx
+        tag: "w:tblPrEx"
+        type: CT_TblPrEx
+        cardinality: zero_or_one
+        successors: ["w:trPr", "w:tc"]
+      - name: TrPr
+        tag: "w:trPr"
+        type: CT_TrPr
+        cardinality: zero_or_one
+        successors: ["w:tc"]
+      - name: Tc
+        tag: "w:tc"
+        type: CT_Tc
+        cardinality: zero_or_more
+        successors: []
+    attributes: []
+
+  - name: CT_Tc
+    tag: "w:tc"
+    doc: "table cell element"
+    children:
+      - name: TcPr
+        tag: "w:tcPr"
+        type: CT_TcPr
+        cardinality: zero_or_one
+        successors: ["w:p", "w:tbl"]
+      - name: P
+        tag: "w:p"
+        type: CT_P
+        cardinality: one_or_more
+        successors: []
+      - name: Tbl
+        tag: "w:tbl"
+        type: CT_Tbl
+        cardinality: one_or_more
+        successors: []
+    attributes: []
+
+  - name: CT_TblPr
+    tag: "w:tblPr"
+    doc: "table properties element"
+    children:
+      - name: TblStyle
+        tag: "w:tblStyle"
+        type: CT_String
+        cardinality: zero_or_one
+        successors: ["w:tblpPr", "w:tblOverlap", "w:bidiVisual", "w:tblStyleRowBandSize", "w:tblStyleColBandSize", "w:tblW", "w:jc", "w:tblCellSpacing", "w:tblInd", "w:tblBorders", "w:shd", "w:tblLayout", "w:tblCellMar", "w:tblLook", "w:tblCaption", "w:tblDescription", "w:tblPrChange"]
+      - name: BidiVisual
+        tag: "w:bidiVisual"
+        type: CT_OnOff
+        cardinality: zero_or_one
+        successors: ["w:tblStyleRowBandSize", "w:tblStyleColBandSize", "w:tblW", "w:jc", "w:tblCellSpacing", "w:tblInd", "w:tblBorders", "w:shd", "w:tblLayout", "w:tblCellMar", "w:tblLook", "w:tblCaption", "w:tblDescription", "w:tblPrChange"]
+      - name: Jc
+        tag: "w:jc"
+        type: CT_Jc
+        cardinality: zero_or_one
+        successors: ["w:tblCellSpacing", "w:tblInd", "w:tblBorders", "w:shd", "w:tblLayout", "w:tblCellMar", "w:tblLook", "w:tblCaption", "w:tblDescription", "w:tblPrChange"]
+      - name: TblLayout
+        tag: "w:tblLayout"
+        type: CT_TblLayoutType
+        cardinality: zero_or_one
+        successors: ["w:tblCellMar", "w:tblLook", "w:tblCaption", "w:tblDescription", "w:tblPrChange"]
+    attributes: []
+
+  - name: CT_TcPr
+    tag: "w:tcPr"
+    doc: "table cell properties element"
+    children:
+      - name: TcW
+        tag: "w:tcW"
+        type: CT_TblWidth
+        cardinality: zero_or_one
+        successors: ["w:gridSpan", "w:hMerge", "w:vMerge", "w:tcBorders", "w:shd", "w:noWrap", "w:tcMar", "w:textDirection", "w:tcFitText", "w:vAlign", "w:hideMark", "w:headers", "w:cellIns", "w:cellDel", "w:cellMerge", "w:tcPrChange"]
+      - name: GridSpan
+        tag: "w:gridSpan"
+        type: CT_DecimalNumber
+        cardinality: zero_or_one
+        successors: ["w:hMerge", "w:vMerge", "w:tcBorders", "w:shd", "w:noWrap", "w:tcMar", "w:textDirection", "w:tcFitText", "w:vAlign", "w:hideMark", "w:headers", "w:cellIns", "w:cellDel", "w:cellMerge", "w:tcPrChange"]
+      - name: VMerge
+        tag: "w:vMerge"
+        type: CT_VMerge
+        cardinality: zero_or_one
+        successors: ["w:tcBorders", "w:shd", "w:noWrap", "w:tcMar", "w:textDirection", "w:tcFitText", "w:vAlign", "w:hideMark", "w:headers", "w:cellIns", "w:cellDel", "w:cellMerge", "w:tcPrChange"]
+      - name: VAlign
+        tag: "w:vAlign"
+        type: CT_VerticalJc
+        cardinality: zero_or_one
+        successors: ["w:hideMark", "w:headers", "w:cellIns", "w:cellDel", "w:cellMerge", "w:tcPrChange"]
+    attributes: []
+
+  - name: CT_TrPr
+    tag: "w:trPr"
+    doc: "table row properties element"
+    children:
+      - name: GridBefore
+        tag: "w:gridBefore"
+        type: CT_DecimalNumber
+        cardinality: zero_or_one
+        successors: ["w:gridAfter", "w:wBefore", "w:wAfter", "w:cantSplit", "w:trHeight", "w:tblHeader", "w:tblCellSpacing", "w:jc", "w:hidden", "w:ins", "w:del", "w:trPrChange"]
+      - name: GridAfter
+        tag: "w:gridAfter"
+        type: CT_DecimalNumber
+        cardinality: zero_or_one
+        successors: ["w:wBefore", "w:wAfter", "w:cantSplit", "w:trHeight", "w:tblHeader", "w:tblCellSpacing", "w:jc", "w:hidden", "w:ins", "w:del", "w:trPrChange"]
+      - name: TrHeight
+        tag: "w:trHeight"
+        type: CT_Height
+        cardinality: zero_or_one
+        successors: ["w:tblHeader", "w:tblCellSpacing", "w:jc", "w:hidden", "w:ins", "w:del", "w:trPrChange"]
+    attributes: []
+
+  - name: CT_TblGrid
+    tag: "w:tblGrid"
+    doc: "table grid element"
+    children:
+      - name: GridCol
+        tag: "w:gridCol"
+        type: CT_TblGridCol
+        cardinality: zero_or_more
+        successors: ["w:tblGridChange"]
+    attributes: []
+
+  - name: CT_TblGridCol
+    tag: "w:gridCol"
+    doc: "table grid column element"
+    children: []
+    attributes:
+      - name: W
+        attr_name: "w:w"
+        type: int
+        required: false
+
+  - name: CT_Height
+    tag: "w:trHeight"
+    doc: "row height element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: int
+        required: false
+      - name: HRule
+        attr_name: "w:hRule"
+        type: enum.WdRowHeightRule
+        required: false
+
+  - name: CT_TblWidth
+    tag: "w:tblW"
+    doc: "table width element"
+    children: []
+    attributes:
+      - name: W
+        attr_name: "w:w"
+        type: int
+        required: true
+      - name: Type
+        attr_name: "w:type"
+        type: string
+        required: true
+
+  - name: CT_TblLayoutType
+    tag: "w:tblLayout"
+    doc: "table layout type element"
+    children: []
+    attributes:
+      - name: Type
+        attr_name: "w:type"
+        type: string
+        required: false
+
+  - name: CT_TblPrEx
+    tag: "w:tblPrEx"
+    doc: "table property exceptions element"
+    children: []
+    attributes: []
+
+  - name: CT_VerticalJc
+    tag: "w:vAlign"
+    doc: "vertical alignment element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: enum.WdCellVerticalAlignment
+        required: true
+
+  - name: CT_VMerge
+    tag: "w:vMerge"
+    doc: "vertical merge element"
+    children: []
+    attributes:
+      - name: Val
+        attr_name: "w:val"
+        type: string
+        required: false
+        default: "\"continue\""
