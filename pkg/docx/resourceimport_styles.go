@@ -580,6 +580,290 @@ func stripNonFormattingAttrs(el *etree.Element) {
 }
 
 // --------------------------------------------------------------------------
+// Expand to direct attributes (KeepSourceFormatting / KeepDifferentStyles)
+// --------------------------------------------------------------------------
+
+// expandDirectFormatting walks prepared content elements and for each
+// paragraph/run whose style is in expandStyles, merges the resolved source
+// formatting into direct attributes on that element.
+//
+// This is the core logic of KeepSourceFormatting mode: when a source style
+// ID conflicts with a target style ID and ForceCopyStyles is false, the
+// source style's formatting is "inlined" into every element that references
+// it, preserving the visual appearance without modifying the target's style
+// definitions.
+//
+// Handles BOTH paragraph styles (pStyle → pPr + rPr) and character styles
+// (rStyle → rPr). This mirrors Aspose.Words which expands both style types
+// to direct attributes.
+//
+// Pipeline position: after materializeImplicitStyles, before remapAll.
+// expandDirectFormatting reads original (unmapped) styleIds; remapAll then
+// replaces them with the target default.
+func (ri *ResourceImporter) expandDirectFormatting(elements []*etree.Element) {
+	if len(ri.expandStyles) == 0 {
+		return
+	}
+
+	for _, root := range elements {
+		stack := []*etree.Element{root}
+		for len(stack) > 0 {
+			el := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+
+			if el.Space == "w" {
+				switch el.Tag {
+				case "p":
+					ri.expandParagraphStyle(el)
+					// Process runs inline — avoids revisiting them from the
+					// DFS stack (runs cannot contain nested paragraphs/tables,
+					// so skipping their subtrees loses nothing).
+					ri.expandRunStylesInParagraph(el)
+				case "r":
+					// Top-level runs outside paragraphs — rare but possible
+					// in malformed OOXML. Process only if not already handled
+					// by expandRunStylesInParagraph above.
+					ri.expandRunStyle(el)
+				}
+			}
+
+			// Push children but skip <w:r> inside <w:p> — already processed
+			// by expandRunStylesInParagraph. Runs have no block-level
+			// descendants, so nothing is lost.
+			isParagraph := el.Space == "w" && el.Tag == "p"
+			for _, child := range el.ChildElements() {
+				if isParagraph && child.Space == "w" && child.Tag == "r" {
+					continue
+				}
+				stack = append(stack, child)
+			}
+		}
+	}
+}
+
+// expandParagraphStyle checks if the paragraph's pStyle is in expandStyles.
+// If so, resolves the full formatting chain from the source style hierarchy
+// and merges the result into the paragraph's pPr and its default rPr.
+//
+// Existing direct attributes take precedence over style-derived values
+// (user formatting > style formatting), matching OOXML precedence rules.
+func (ri *ResourceImporter) expandParagraphStyle(pEl *etree.Element) {
+	pPr := findChild(pEl, "w", "pPr")
+	if pPr == nil {
+		return
+	}
+	pStyleEl := findChild(pPr, "w", "pStyle")
+	if pStyleEl == nil {
+		return
+	}
+	styleId := pStyleEl.SelectAttrValue("w:val", "")
+	srcStyle, needsExpand := ri.expandStyles[styleId]
+	if !needsExpand {
+		return
+	}
+
+	// Resolve full formatting from source style chain.
+	resolvedPPr, resolvedRPr := ri.resolveStyleChain(srcStyle)
+
+	// Merge resolved pPr into existing pPr (direct attrs take precedence).
+	if resolvedPPr != nil {
+		mergePropertiesDeep(pPr, resolvedPPr)
+	}
+
+	// Merge resolved rPr into the paragraph-level default rPr.
+	// This is the <w:rPr> inside <w:pPr> — defines default run formatting
+	// for runs in this paragraph that don't have their own rPr.
+	if resolvedRPr != nil {
+		existingRPr := findChild(pPr, "w", "rPr")
+		if existingRPr == nil {
+			existingRPr = etree.NewElement("w:rPr")
+			pPr.AddChild(existingRPr)
+		}
+		mergePropertiesDeep(existingRPr, resolvedRPr)
+	}
+}
+
+// expandRunStylesInParagraph processes all <w:r> children of a paragraph,
+// expanding character styles (rStyle) that are in expandStyles.
+func (ri *ResourceImporter) expandRunStylesInParagraph(pEl *etree.Element) {
+	for _, child := range pEl.ChildElements() {
+		if child.Space == "w" && child.Tag == "r" {
+			ri.expandRunStyle(child)
+		}
+	}
+}
+
+// expandRunStyle checks if the run's rStyle is in expandStyles. If so,
+// resolves the source character style chain and merges the rPr into the
+// run's existing rPr (direct attrs take precedence).
+func (ri *ResourceImporter) expandRunStyle(rEl *etree.Element) {
+	rPr := findChild(rEl, "w", "rPr")
+	if rPr == nil {
+		return
+	}
+	rStyleEl := findChild(rPr, "w", "rStyle")
+	if rStyleEl == nil {
+		return
+	}
+	styleId := rStyleEl.SelectAttrValue("w:val", "")
+	srcStyle, needsExpand := ri.expandStyles[styleId]
+	if !needsExpand {
+		return
+	}
+
+	// For character styles, only rPr is relevant.
+	_, resolvedRPr := ri.resolveStyleChain(srcStyle)
+	if resolvedRPr != nil {
+		mergePropertiesDeep(rPr, resolvedRPr)
+	}
+}
+
+// resolveStyleChain walks the basedOn chain in the source styles part
+// and merges pPr/rPr properties from base to derived (child overrides
+// parent). Returns deep copies safe to modify.
+//
+// The chain is built root-first [style, parent, grandparent, ...] then
+// merged in reverse order so that derived style properties override
+// inherited ones.
+//
+// Cycle protection via visited set prevents infinite loops on malformed
+// style definitions.
+func (ri *ResourceImporter) resolveStyleChain(style *oxml.CT_Style) (pPr, rPr *etree.Element) {
+	srcStyles, err := ri.sourceStyles()
+	if err != nil {
+		return nil, nil
+	}
+
+	// Build chain: [style, parent, grandparent, ...]
+	var chain []*oxml.CT_Style
+	visited := map[string]bool{}
+	current := style
+	for current != nil {
+		id := current.StyleId()
+		if visited[id] {
+			break // cycle protection
+		}
+		visited[id] = true
+		chain = append(chain, current)
+
+		basedOn, _ := current.BasedOnVal()
+		if basedOn == "" {
+			break
+		}
+		current = srcStyles.GetByID(basedOn)
+	}
+
+	// Merge from base to derived (so derived overrides base).
+	for i := len(chain) - 1; i >= 0; i-- {
+		raw := chain[i].RawElement()
+		if p := findChild(raw, "w", "pPr"); p != nil {
+			if pPr == nil {
+				pPr = p.Copy()
+			} else {
+				overridePropertiesDeep(pPr, p)
+			}
+		}
+		if r := findChild(raw, "w", "rPr"); r != nil {
+			if rPr == nil {
+				rPr = r.Copy()
+			} else {
+				overridePropertiesDeep(rPr, r)
+			}
+		}
+	}
+
+	// Strip pStyle/rStyle from resolved properties — they are style-internal
+	// references (basedOn inheritance), not meaningful as direct attributes.
+	if pPr != nil {
+		removeChild(pPr, "w", "pStyle")
+	}
+	if rPr != nil {
+		removeChild(rPr, "w", "rStyle")
+	}
+
+	return
+}
+
+// --------------------------------------------------------------------------
+// Property merging helpers
+// --------------------------------------------------------------------------
+
+// mergePropertiesDeep merges children of src into dst with attribute-level
+// granularity, where dst (existing direct formatting) takes precedence.
+//
+// For each child in src:
+//   - If dst has no child with the same space:tag → copy entire child from src
+//   - If dst has child with the same space:tag → merge attributes from src
+//     child into dst child (dst attributes take precedence)
+//
+// This produces correct results for complex properties like <w:rFonts>
+// where src might have w:ascii and dst might have w:hAnsi — the result
+// contains both attributes.
+func mergePropertiesDeep(dst, src *etree.Element) {
+	for _, srcChild := range src.ChildElements() {
+		dstChild := findChild(dst, srcChild.Space, srcChild.Tag)
+		if dstChild == nil {
+			// Not present in dst — copy entire element from src.
+			dst.AddChild(srcChild.Copy())
+		} else {
+			// Both have this property — merge attributes.
+			// dst attributes take precedence (direct formatting > style).
+			mergeAttrs(dstChild, srcChild)
+		}
+	}
+}
+
+// overridePropertiesDeep merges children of src into dst where src (derived
+// style) takes precedence over dst (base style). Used during style chain
+// resolution where child style overrides parent.
+//
+// For each child in src:
+//   - If dst has no child with the same space:tag → copy from src
+//   - If dst has child with the same space:tag → src attrs override dst attrs
+func overridePropertiesDeep(dst, src *etree.Element) {
+	for _, srcChild := range src.ChildElements() {
+		dstChild := findChild(dst, srcChild.Space, srcChild.Tag)
+		if dstChild == nil {
+			dst.AddChild(srcChild.Copy())
+		} else {
+			// src (derived) overrides dst (base).
+			overrideAttrs(dstChild, srcChild)
+		}
+	}
+}
+
+// mergeAttrs copies attributes from src to dst that don't already exist
+// in dst. dst attributes take precedence — existing values are never
+// overwritten. Used when merging style properties into direct formatting.
+func mergeAttrs(dst, src *etree.Element) {
+	dstKeys := make(map[string]bool, len(dst.Attr))
+	for _, a := range dst.Attr {
+		dstKeys[a.FullKey()] = true
+	}
+	for _, a := range src.Attr {
+		if !dstKeys[a.FullKey()] {
+			dst.Attr = append(dst.Attr, a)
+		}
+	}
+}
+
+// overrideAttrs copies attributes from src to dst, overwriting any existing
+// attribute with the same key. Used during style chain resolution where
+// derived style properties override inherited ones.
+func overrideAttrs(dst, src *etree.Element) {
+	for _, srcAttr := range src.Attr {
+		dst.CreateAttr(srcAttr.FullKey(), srcAttr.Value)
+	}
+}
+
+// removeChild removes the first child with given space:tag from el.
+func removeChild(el *etree.Element, space, tag string) {
+	if child := findChild(el, space, tag); child != nil {
+		el.RemoveChild(child)
+	}
+}
+
+// --------------------------------------------------------------------------
 // Low-level etree helpers
 // --------------------------------------------------------------------------
 

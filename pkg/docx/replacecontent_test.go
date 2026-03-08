@@ -1293,6 +1293,256 @@ func TestDocument_ReplaceWithContent_BodyRolledBackOnPostMutationError(t *testin
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Integration tests: KeepSourceFormatting — expand to direct attributes
+// ---------------------------------------------------------------------------
+
+func TestDocument_ReplaceWithContent_KeepSourceFormatting_ExpandsDirect(t *testing.T) {
+	// Setup: target and source both have "CustomTitle" style but with
+	// DIFFERENT definitions. Under KeepSourceFormatting, the source
+	// style formatting should be expanded into direct attributes on
+	// the inserted paragraph.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	// Add "CustomTitle" style to target (left-aligned, sz=24).
+	tgtStyles, err := target.part.Styles()
+	if err != nil {
+		t.Fatalf("target Styles: %v", err)
+	}
+	tgtStyleXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/>` +
+		`<w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`<w:rPr><w:sz w:val="24"/></w:rPr>` +
+		`</w:style>`
+	tgtStyleEl, _ := oxml.ParseXml([]byte(tgtStyleXml))
+	tgtStyles.RawElement().AddChild(tgtStyleEl)
+
+	// Source: create doc, add "CustomTitle" style (center, bold, sz=28),
+	// and inject a paragraph referencing it via raw XML.
+	source := mustNewDoc(t)
+	srcStyles, err := source.part.Styles()
+	if err != nil {
+		t.Fatalf("source Styles: %v", err)
+	}
+	srcStyleXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`<w:rPr><w:b/><w:sz w:val="28"/></w:rPr>` +
+		`</w:style>`
+	srcStyleEl, _ := oxml.ParseXml([]byte(srcStyleXml))
+	srcStyles.RawElement().AddChild(srcStyleEl)
+
+	// Inject paragraph with pStyle=CustomTitle into source body.
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="CustomTitle"/></w:pPr>` +
+			`<w:r><w:t>Styled heading</w:t></w:r></w:p>`,
+	))
+	// Insert before sectPr.
+	children := srcBody.ChildElements()
+	inserted := false
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, styledP)
+			inserted = true
+			break
+		}
+	}
+	if !inserted {
+		srcBody.AddChild(styledP)
+	}
+
+	// Replace with KeepSourceFormatting.
+	count, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+
+	// Find the inserted paragraph and verify expansion happened.
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		// Look for expanded jc=center from source style.
+		jc := findChild(pPr, "w", "jc")
+		if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+			// The source style's jc=center was expanded as a direct attribute.
+			// Also check that rPr with b was expanded.
+			rPr := findChild(pPr, "w", "rPr")
+			if rPr == nil {
+				t.Error("expected rPr with expanded properties")
+				return
+			}
+			if findChild(rPr, "w", "b") == nil {
+				t.Error("expected bold (b) expanded from source style")
+			}
+			// pStyle should be remapped to default (Normal), not CustomTitle.
+			pStyle := findChild(pPr, "w", "pStyle")
+			if pStyle != nil {
+				val := pStyle.SelectAttrValue("w:val", "")
+				if val == "CustomTitle" {
+					t.Error("pStyle should have been remapped away from CustomTitle")
+				}
+			}
+			return
+		}
+	}
+	t.Error("expected to find paragraph with expanded jc=center from source style")
+}
+
+func TestDocument_ReplaceWithContent_KeepSourceFormatting_RoundTrip(t *testing.T) {
+	// End-to-end test: expand + save + reopen must produce valid document.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<X>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`<w:rPr><w:b/></w:rPr></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	// Inject styled paragraph.
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="CustomTitle"/></w:pPr>` +
+			`<w:r><w:t>heading text</w:t></w:r></w:p>`,
+	))
+	children := srcBody.ChildElements()
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, styledP)
+			break
+		}
+	}
+
+	_, err := target.ReplaceWithContent("[<X>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Save and reopen.
+	var buf bytes.Buffer
+	if err := target.Save(&buf); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	reopened, err := OpenBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+
+	// Verify text survived.
+	texts := rcBodyTexts(t, reopened)
+	found := false
+	for _, txt := range texts {
+		if strings.Contains(txt, "heading text") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'heading text' in reopened document")
+	}
+}
+
+func TestDocument_ReplaceWithContent_UseDestination_NoExpansion(t *testing.T) {
+	// Verify that UseDestinationStyles (default) does NOT expand.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	// Inject styled paragraph.
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="CustomTitle"/></w:pPr>` +
+			`<w:r><w:t>title</w:t></w:r></w:p>`,
+	))
+	children := srcBody.ChildElements()
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, styledP)
+			break
+		}
+	}
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: UseDestinationStyles, // explicit default
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Under UseDestinationStyles, pStyle stays as CustomTitle (no expansion),
+	// and no jc=center should appear (target's left-aligned definition wins).
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		pStyle := findChild(pPr, "w", "pStyle")
+		if pStyle == nil {
+			continue
+		}
+		val := pStyle.SelectAttrValue("w:val", "")
+		if val == "CustomTitle" {
+			// No expansion — jc should NOT be present as direct attr.
+			jc := findChild(pPr, "w", "jc")
+			if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+				t.Error("UseDestinationStyles should NOT expand jc=center from source")
+			}
+			return
+		}
+	}
+}
+
 func TestDocument_SnapshotBody_RoundTrip(t *testing.T) {
 	// Verify that snapshot/restore produces a valid document that can be saved.
 	doc := mustNewDoc(t)

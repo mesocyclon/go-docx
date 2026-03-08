@@ -374,10 +374,18 @@ func prepareContentElements(
 	// so they keep their original appearance after insertion.
 	ri.materializeImplicitStyles(elements)
 
-	// Step 2d: Remap resource references (styles, numbering, footnotes).
+	// Step 2d: Expand direct formatting for KeepSourceFormatting mode.
+	// For styles marked for expansion (conflict + no ForceCopyStyles),
+	// resolves the source style chain and merges properties into direct
+	// paragraph/run attributes. Must run BEFORE remapAll because it
+	// reads original (unmapped) styleIds to find elements to expand.
+	ri.expandDirectFormatting(elements)
+
+	// Step 2e: Remap resource references (styles, numbering, footnotes).
 	// Uses mappings populated during the import phase (Phase 1 of
-	// ReplaceWithContent). In Phase 1 this is a no-op; branches are
-	// added in Phases 2-4.
+	// ReplaceWithContent). After expandDirectFormatting has inlined
+	// properties, remapAll changes expanded style refs to the target
+	// default paragraph style.
 	ri.remapAll(elements)
 
 	// Step 3: Collect all rId references from the copies.
