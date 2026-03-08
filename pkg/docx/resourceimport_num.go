@@ -55,25 +55,48 @@ func (ri *ResourceImporter) importNumbering() error {
 		return fmt.Errorf("docx: accessing target numbering element: %w", err)
 	}
 
-	// 4. For each referenced numId, import the num and its abstractNum.
+	// 4. Build reverse map for KeepSourceNumbering=false merge path.
+	// Maps target abstractNumId → first numId that references it.
+	// Built once, O(N), avoids repeated O(A*N) scans in findMatchingTargetNum.
+	var tgtAbsToNum map[int]int
+	if !ri.opts.KeepSourceNumbering {
+		tgtAbsToNum = buildAbsNumToNumIdMap(tgtNumbering)
+	}
+
+	// 5. For each referenced numId, import the num and its abstractNum.
 	for _, srcNumId := range referencedNumIds {
 		if _, done := ri.numIdMap[srcNumId]; done {
 			continue
 		}
 
-		// 4a. Find <w:num> in source.
+		// 5a. Find <w:num> in source.
 		srcNum := srcNumbering.NumHavingNumId(srcNumId)
 		if srcNum == nil {
 			continue
 		}
 
-		// 4b. Extract abstractNumId.
+		// 5b. Extract abstractNumId.
 		srcAbsId, err := abstractNumIdOf(srcNum)
 		if err != nil {
 			continue
 		}
 
-		// 4c. Import abstractNum (if not already done).
+		// 5b2. When KeepSourceNumbering is disabled, try to merge into
+		// a matching target list before creating a new abstractNum.
+		// If a compatible list definition exists (same first-level numFmt),
+		// reuse it — the source numbering continues the target sequence.
+		//
+		// Uses absNumIdMap as cache: if we already resolved this srcAbsId
+		// to a target numId via merge, reuse the same mapping.
+		if !ri.opts.KeepSourceNumbering {
+			if tgtNumId := ri.findMatchingTargetNum(srcAbsId, srcNumbering, tgtNumbering, tgtAbsToNum); tgtNumId > 0 {
+				ri.numIdMap[srcNumId] = tgtNumId
+				ri.absNumIdMap[srcAbsId] = -tgtNumId // negative sentinel: merged, not copied
+				continue
+			}
+		}
+
+		// 5c. Import abstractNum (if not already done).
 		tgtAbsId, ok := ri.absNumIdMap[srcAbsId]
 		if !ok {
 			imported, err := ri.importAbstractNum(srcNumbering, tgtNumbering, srcAbsId)
@@ -84,7 +107,7 @@ func (ri *ResourceImporter) importNumbering() error {
 			ri.absNumIdMap[srcAbsId] = tgtAbsId
 		}
 
-		// 4d. Create new <w:num> in target.
+		// 5d. Create new <w:num> in target.
 		tgtNum, err := tgtNumbering.AddNumWithAbstractNumId(tgtAbsId)
 		if err != nil {
 			return fmt.Errorf("docx: adding num to target: %w", err)
@@ -94,7 +117,7 @@ func (ri *ResourceImporter) importNumbering() error {
 			return fmt.Errorf("docx: reading new numId: %w", err)
 		}
 
-		// 4e. Copy <w:lvlOverride> elements if present.
+		// 5e. Copy <w:lvlOverride> elements if present.
 		copyLvlOverrides(srcNum, tgtNum)
 
 		ri.numIdMap[srcNumId] = tgtNumId
@@ -220,4 +243,102 @@ func copyLvlOverrides(srcNum, tgtNum *oxml.CT_Num) {
 		clone := override.RawElement().Copy()
 		tgtNum.RawElement().AddChild(clone)
 	}
+}
+
+// --------------------------------------------------------------------------
+// Numbering merge (KeepSourceNumbering = false)
+// --------------------------------------------------------------------------
+
+// buildAbsNumToNumIdMap builds a reverse index: target abstractNumId → first
+// numId referencing it. Built once per importNumbering call to avoid repeated
+// O(A*N) scans when matching multiple source lists.
+func buildAbsNumToNumIdMap(numbering *oxml.CT_Numbering) map[int]int {
+	result := make(map[int]int)
+	for _, num := range numbering.NumList() {
+		absId, err := abstractNumIdOf(num)
+		if err != nil {
+			continue
+		}
+		if _, exists := result[absId]; exists {
+			continue // keep first — stable ordering
+		}
+		numId, err := num.NumId()
+		if err != nil {
+			continue
+		}
+		result[absId] = numId
+	}
+	return result
+}
+
+// findMatchingTargetNum finds a target num whose abstractNum has a compatible
+// list style, based on the first level's numFmt.
+//
+// Matching heuristic: compare numFmt of the first <w:lvl w:ilvl="0"> in the
+// source abstractNum against every target abstractNum. If both use the same
+// numFmt value (bullet, decimal, lowerLetter, etc.), the target list is
+// considered compatible and its numId is returned.
+//
+// tgtAbsToNum is a pre-built reverse map (abstractNumId → numId) for O(1)
+// lookup instead of scanning NumList() per candidate.
+//
+// Returns 0 if no matching target num exists — the caller should fall through
+// to the standard abstractNum import path (creating a separate list).
+func (ri *ResourceImporter) findMatchingTargetNum(
+	srcAbsId int,
+	srcNumbering, tgtNumbering *oxml.CT_Numbering,
+	tgtAbsToNum map[int]int,
+) int {
+	// Cache check: if we already resolved this srcAbsId via merge path,
+	// the absNumIdMap contains a negative sentinel (-tgtNumId).
+	if cached, ok := ri.absNumIdMap[srcAbsId]; ok && cached < 0 {
+		return -cached
+	}
+
+	srcAbsNum := srcNumbering.FindAbstractNum(srcAbsId)
+	if srcAbsNum == nil {
+		return 0
+	}
+	srcFmt := firstLevelNumFmt(srcAbsNum)
+	if srcFmt == "" {
+		return 0
+	}
+
+	// Scan target abstractNums for a matching first-level numFmt.
+	for _, tgtAbsNum := range tgtNumbering.AllAbstractNums() {
+		if firstLevelNumFmt(tgtAbsNum) != srcFmt {
+			continue
+		}
+		tgtAbsId := oxml.AbstractNumIdOf(tgtAbsNum)
+		if tgtAbsId < 0 {
+			continue
+		}
+		// O(1) lookup via pre-built reverse map.
+		if numId, ok := tgtAbsToNum[tgtAbsId]; ok {
+			return numId
+		}
+	}
+	return 0
+}
+
+// firstLevelNumFmt returns the w:numFmt/@w:val of the first level
+// (w:ilvl="0") in an <w:abstractNum> element. Returns "" if the level
+// or numFmt is not found.
+//
+// This is the primary signal for list type comparison: "bullet" for
+// unordered lists, "decimal" / "lowerLetter" / "upperRoman" etc. for
+// ordered lists.
+func firstLevelNumFmt(absNum *etree.Element) string {
+	for _, child := range absNum.ChildElements() {
+		if child.Space == "w" && child.Tag == "lvl" {
+			if child.SelectAttrValue("w:ilvl", "") == "0" {
+				for _, lvlChild := range child.ChildElements() {
+					if lvlChild.Space == "w" && lvlChild.Tag == "numFmt" {
+						return lvlChild.SelectAttrValue("w:val", "")
+					}
+				}
+			}
+		}
+	}
+	return ""
 }

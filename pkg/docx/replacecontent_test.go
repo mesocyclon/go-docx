@@ -2,6 +2,7 @@ package docx
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -2004,4 +2005,1134 @@ func TestDocument_ReplaceWithContent_KeepDifferentStyles_SameFormatting_NoRename
 		}
 	}
 	t.Error("expected pStyle=CustomTitle in inserted paragraph (same formatting → use target)")
+}
+
+// --------------------------------------------------------------------------
+// ImportFormatMode — additional coverage (Step 8.2)
+// --------------------------------------------------------------------------
+
+func TestRWC_UseDestination_MissingStyleCopied(t *testing.T) {
+	t.Parallel()
+	// When the source style does NOT exist in target, UseDestinationStyles
+	// deep-copies it (all 3 modes agree on this behavior).
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="OnlyInSource">` +
+		`<w:name w:val="Only In Source"/>` +
+		`<w:pPr><w:jc w:val="right"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	rcInjectStyledParagraph(t, source, "OnlyInSource", "styled text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: UseDestinationStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Style should have been deep-copied to target.
+	tgtStyles, _ := target.part.Styles()
+	if tgtStyles.GetByID("OnlyInSource") == nil {
+		t.Error("expected OnlyInSource style to be deep-copied into target")
+	}
+}
+
+func TestRWC_KeepSource_Conflict_DirectPreservesExisting(t *testing.T) {
+	t.Parallel()
+	// Existing direct attributes on a paragraph must NOT be overwritten
+	// when expanding source style formatting to direct attributes.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Conflict">` +
+		`<w:name w:val="Conflict"/>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Conflict">` +
+		`<w:name w:val="Conflict"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`<w:rPr><w:sz w:val="28"/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	// Inject paragraph with existing direct jc=right (should win over style's center).
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="Conflict"/><w:jc w:val="right"/></w:pPr>` +
+			`<w:r><w:t>direct wins</w:t></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, styledP)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Find inserted paragraph — jc must be "right" (direct), not "center" (style).
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		jc := findChild(pPr, "w", "jc")
+		if jc == nil {
+			continue
+		}
+		if jc.SelectAttrValue("w:val", "") == "right" {
+			// Good — sz=28 should also have been expanded from style.
+			rPr := findChild(pPr, "w", "rPr")
+			if rPr == nil {
+				t.Error("expected rPr with sz=28 expanded from style")
+			} else if sz := findChild(rPr, "w", "sz"); sz == nil || sz.SelectAttrValue("w:val", "") != "28" {
+				t.Error("expected sz=28 expanded from source style")
+			}
+			return
+		}
+	}
+	t.Error("expected paragraph with jc=right (direct attribute preserved)")
+}
+
+func TestRWC_KeepSource_ForceRename_ChainRenamed(t *testing.T) {
+	t.Parallel()
+	// When ForceCopyStyles is true and a source style with basedOn chain
+	// conflicts, both the child and parent styles should be renamed.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	// Add both "BaseStyle" and "DerivedStyle" to target to cause conflict.
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="BaseStyle">` +
+			`<w:name w:val="Base Style"/>` +
+			`<w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="DerivedStyle">` +
+			`<w:name w:val="Derived Style"/>` +
+			`<w:basedOn w:val="BaseStyle"/>` +
+			`<w:rPr><w:i/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		tgtStyles.RawElement().AddChild(el)
+	}
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	// Source versions with different formatting.
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="BaseStyle">` +
+			`<w:name w:val="Base Style"/>` +
+			`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="DerivedStyle">` +
+			`<w:name w:val="Derived Style"/>` +
+			`<w:basedOn w:val="BaseStyle"/>` +
+			`<w:rPr><w:b/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		srcStyles.RawElement().AddChild(el)
+	}
+	rcInjectStyledParagraph(t, source, "DerivedStyle", "chain text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{ForceCopyStyles: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Both styles should be renamed (_0 suffix).
+	tgtStyles, _ = target.part.Styles()
+	if tgtStyles.GetByID("DerivedStyle_0") == nil {
+		t.Error("expected DerivedStyle_0 in target")
+	}
+	if tgtStyles.GetByID("BaseStyle_0") == nil {
+		t.Error("expected BaseStyle_0 in target")
+	}
+
+	// Verify both renamed styles have semiHidden marker.
+	for _, sid := range []string{"DerivedStyle_0", "BaseStyle_0"} {
+		s := tgtStyles.GetByID(sid)
+		if s != nil && findChild(s.RawElement(), "w", "semiHidden") == nil {
+			t.Errorf("expected semiHidden on %s", sid)
+		}
+	}
+}
+
+func TestRWC_KeepDifferent_DifferentExpanded(t *testing.T) {
+	t.Parallel()
+	// KeepDifferentStyles WITHOUT ForceCopyStyles: different formatting
+	// should expand to direct attributes (same behavior as KeepSourceFormatting).
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="DiffStyle">` +
+		`<w:name w:val="Diff Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="DiffStyle">` +
+		`<w:name w:val="Diff Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`<w:rPr><w:b/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	rcInjectStyledParagraph(t, source, "DiffStyle", "expanded text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+		// NO ForceCopyStyles — should expand
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Verify jc=center expanded into direct attributes.
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		jc := findChild(pPr, "w", "jc")
+		if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+			return // OK — expanded
+		}
+	}
+	t.Error("expected jc=center expanded from source style (KeepDifferentStyles, no ForceCopy)")
+}
+
+func TestRWC_BackwardCompat_ZeroValue(t *testing.T) {
+	t.Parallel()
+	// ContentData{Source: doc} with zero-value Format/Options must behave
+	// exactly like UseDestinationStyles (the backward-compatible default).
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="MyStyle">` +
+		`<w:name w:val="My Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="MyStyle">` +
+		`<w:name w:val="My Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	rcInjectStyledParagraph(t, source, "MyStyle", "zero value mode")
+
+	// Zero-value ContentData — no Format set.
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// UseDestinationStyles: pStyle stays MyStyle, no jc=center expansion.
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		jc := findChild(pPr, "w", "jc")
+		if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+			t.Error("zero-value Format should NOT expand jc=center (UseDestinationStyles)")
+		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// Expand to Direct Attributes — additional coverage (Step 8.3)
+// --------------------------------------------------------------------------
+
+func TestRWC_Expand_RunStyle_Expanded(t *testing.T) {
+	t.Parallel()
+	// Character style (rStyle) on a run should be expanded to direct rPr
+	// when KeepSourceFormatting is active and the style conflicts.
+	// Uses unique styleId to avoid collision with built-in Emphasis.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="character" w:styleId="RunCharCustom">` +
+		`<w:name w:val="Run Char Custom"/><w:rPr><w:i/></w:rPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="character" w:styleId="RunCharCustom">` +
+		`<w:name w:val="Run Char Custom"/><w:rPr><w:b/><w:i/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	// Inject run with rStyle=RunCharCustom into source body.
+	srcBody := source.element.Body().RawElement()
+	p, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:r><w:rPr><w:rStyle w:val="RunCharCustom"/></w:rPr>` +
+			`<w:t>emphasized text</w:t></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, p)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Run should have bold expanded from source RunCharCustom style.
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		for _, r := range child.ChildElements() {
+			if r.Space != "w" || r.Tag != "r" {
+				continue
+			}
+			rPr := findChild(r, "w", "rPr")
+			if rPr != nil && findChild(rPr, "w", "b") != nil {
+				return // OK — bold was expanded from character style
+			}
+		}
+	}
+	t.Error("expected bold expanded from source character style on run")
+}
+
+func TestRWC_Expand_MixedStyles_BothExpanded(t *testing.T) {
+	t.Parallel()
+	// Both paragraph style and character style conflict: both should be
+	// expanded to direct attributes on the same paragraph/run.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="ParaStyle">` +
+			`<w:name w:val="Para Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="character" w:styleId="CharStyle">` +
+			`<w:name w:val="Char Style"/><w:rPr><w:i/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		tgtStyles.RawElement().AddChild(el)
+	}
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="ParaStyle">` +
+			`<w:name w:val="Para Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="character" w:styleId="CharStyle">` +
+			`<w:name w:val="Char Style"/><w:rPr><w:b/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		srcStyles.RawElement().AddChild(el)
+	}
+
+	srcBody := source.element.Body().RawElement()
+	p, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="ParaStyle"/></w:pPr>` +
+			`<w:r><w:rPr><w:rStyle w:val="CharStyle"/></w:rPr>` +
+			`<w:t>both expanded</w:t></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, p)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Verify: jc=center from paragraph style AND bold from character style.
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		jc := findChild(pPr, "w", "jc")
+		if jc == nil || jc.SelectAttrValue("w:val", "") != "center" {
+			continue
+		}
+		// Paragraph style expanded. Now check run.
+		for _, r := range child.ChildElements() {
+			if r.Space != "w" || r.Tag != "r" {
+				continue
+			}
+			rPr := findChild(r, "w", "rPr")
+			if rPr != nil && findChild(rPr, "w", "b") != nil {
+				return // Both expanded
+			}
+		}
+	}
+	t.Error("expected both paragraph (jc=center) and character (bold) styles expanded")
+}
+
+func TestRWC_Expand_ExistingDirectWins(t *testing.T) {
+	t.Parallel()
+	// Direct attributes on a run must NOT be overwritten by expanded style.
+	// Uses unique styleId to avoid collision with built-in Strong.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="character" w:styleId="DirectWinsChar">` +
+		`<w:name w:val="Direct Wins Char"/><w:rPr><w:i/></w:rPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="character" w:styleId="DirectWinsChar">` +
+		`<w:name w:val="Direct Wins Char"/><w:rPr><w:sz w:val="28"/><w:color w:val="FF0000"/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	// Run with direct sz=24 (should NOT be overwritten by style's sz=28).
+	srcBody := source.element.Body().RawElement()
+	p, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:r><w:rPr><w:rStyle w:val="DirectWinsChar"/><w:sz w:val="24"/></w:rPr>` +
+			`<w:t>direct wins</w:t></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, p)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		for _, r := range child.ChildElements() {
+			if r.Space != "w" || r.Tag != "r" {
+				continue
+			}
+			rPr := findChild(r, "w", "rPr")
+			if rPr == nil {
+				continue
+			}
+			sz := findChild(rPr, "w", "sz")
+			if sz == nil {
+				continue
+			}
+			if sz.SelectAttrValue("w:val", "") == "24" {
+				// Direct sz=24 preserved. color=FF0000 should also be expanded.
+				color := findChild(rPr, "w", "color")
+				if color == nil || color.SelectAttrValue("w:val", "") != "FF0000" {
+					t.Error("expected color=FF0000 expanded from style")
+				}
+				return
+			}
+			if sz.SelectAttrValue("w:val", "") == "28" {
+				t.Error("direct sz=24 was overwritten by style sz=28")
+				return
+			}
+		}
+	}
+	t.Error("expected run with direct sz=24 preserved")
+}
+
+func TestRWC_Expand_DeepMerge_RFonts(t *testing.T) {
+	t.Parallel()
+	// <w:rFonts> attributes should merge at attribute level: if direct has
+	// w:ascii and style has w:hAnsi, the result should contain both.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="FontMerge">` +
+		`<w:name w:val="Font Merge"/>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="FontMerge">` +
+		`<w:name w:val="Font Merge"/>` +
+		`<w:rPr><w:rFonts w:ascii="Times" w:hAnsi="Times"/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	// Paragraph with existing rFonts w:ascii="Arial" (should win).
+	srcBody := source.element.Body().RawElement()
+	p, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="FontMerge"/>` +
+			`<w:rPr><w:rFonts w:ascii="Arial"/></w:rPr></w:pPr>` +
+			`<w:r><w:t>font merge test</w:t></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, p)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Verify rFonts has both ascii=Arial (direct) and hAnsi=Times (from style).
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		rPr := findChild(pPr, "w", "rPr")
+		if rPr == nil {
+			continue
+		}
+		rFonts := findChild(rPr, "w", "rFonts")
+		if rFonts == nil {
+			continue
+		}
+		ascii := rFonts.SelectAttrValue("w:ascii", "")
+		hAnsi := rFonts.SelectAttrValue("w:hAnsi", "")
+		if ascii == "Arial" && hAnsi == "Times" {
+			return // deep merge worked
+		}
+	}
+	t.Error("expected rFonts with ascii=Arial (direct) and hAnsi=Times (style)")
+}
+
+func TestRWC_Expand_BasedOnChain_3Levels(t *testing.T) {
+	t.Parallel()
+	// 3-level basedOn chain: Grandchild → Child → Base.
+	// Expansion should resolve all three levels.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Grandchild">` +
+		`<w:name w:val="Grandchild"/>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="Base">` +
+			`<w:name w:val="Base"/>` +
+			`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`<w:rPr><w:sz w:val="20"/></w:rPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="Child">` +
+			`<w:name w:val="Child"/>` +
+			`<w:basedOn w:val="Base"/>` +
+			`<w:rPr><w:b/></w:rPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="Grandchild">` +
+			`<w:name w:val="Grandchild"/>` +
+			`<w:basedOn w:val="Child"/>` +
+			`<w:rPr><w:i/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		srcStyles.RawElement().AddChild(el)
+	}
+	rcInjectStyledParagraph(t, source, "Grandchild", "3-level chain")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Verify resolved properties: jc=center (Base), bold (Child), italic (Grandchild).
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		jc := findChild(pPr, "w", "jc")
+		if jc == nil || jc.SelectAttrValue("w:val", "") != "center" {
+			continue
+		}
+		rPr := findChild(pPr, "w", "rPr")
+		if rPr == nil {
+			continue
+		}
+		hasB := findChild(rPr, "w", "b") != nil
+		hasI := findChild(rPr, "w", "i") != nil
+		hasSz := findChild(rPr, "w", "sz") != nil
+		if hasB && hasI && hasSz {
+			return // all 3 levels resolved
+		}
+		t.Errorf("missing properties: bold=%v, italic=%v, sz=%v", hasB, hasI, hasSz)
+		return
+	}
+	t.Error("expected paragraph with 3-level basedOn chain resolved")
+}
+
+func TestRWC_Expand_CyclicBasedOn_NoPanic(t *testing.T) {
+	t.Parallel()
+	// Cyclic basedOn: A → B → A. Must not infinite loop or panic.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CyclicA">` +
+		`<w:name w:val="Cyclic A"/>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="CyclicA">` +
+			`<w:name w:val="Cyclic A"/>` +
+			`<w:basedOn w:val="CyclicB"/>` +
+			`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="CyclicB">` +
+			`<w:name w:val="Cyclic B"/>` +
+			`<w:basedOn w:val="CyclicA"/>` +
+			`<w:rPr><w:b/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		srcStyles.RawElement().AddChild(el)
+	}
+	rcInjectStyledParagraph(t, source, "CyclicA", "cyclic test")
+
+	// Must complete without panic.
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepSourceFormatting,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v (should not error on cycle)", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Edge Cases (Step 8.6)
+// --------------------------------------------------------------------------
+
+func TestRWC_SDT_Preserved(t *testing.T) {
+	t.Parallel()
+	// SDT (Structured Document Tag) elements must survive copy.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcBody := source.element.Body().RawElement()
+	sdt, _ := oxml.ParseXml([]byte(
+		`<w:sdt xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:sdtPr><w:alias w:val="TestSDT"/></w:sdtPr>` +
+			`<w:sdtContent><w:p><w:r><w:t>SDT content</w:t></w:r></w:p></w:sdtContent>` +
+			`</w:sdt>`,
+	))
+	rcInsertBeforeSectPr(srcBody, sdt)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Verify SDT element exists in target body.
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space == "w" && child.Tag == "sdt" {
+			sdtPr := findChild(child, "w", "sdtPr")
+			if sdtPr != nil {
+				alias := findChild(sdtPr, "w", "alias")
+				if alias != nil && alias.SelectAttrValue("w:val", "") == "TestSDT" {
+					return // OK
+				}
+			}
+		}
+	}
+	t.Error("expected SDT element with alias=TestSDT in target body")
+}
+
+func TestRWC_FieldCode_Preserved(t *testing.T) {
+	t.Parallel()
+	// Field codes (w:fldChar, w:instrText) must survive copy.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcBody := source.element.Body().RawElement()
+	p, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:r><w:fldChar w:fldCharType="begin"/></w:r>` +
+			`<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>` +
+			`<w:r><w:fldChar w:fldCharType="separate"/></w:r>` +
+			`<w:r><w:t>1</w:t></w:r>` +
+			`<w:r><w:fldChar w:fldCharType="end"/></w:r>` +
+			`</w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, p)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Find fldChar elements in target.
+	body, _ := target.getBody()
+	fldCharCount := 0
+	instrCount := 0
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		for _, r := range child.ChildElements() {
+			if r.Space != "w" || r.Tag != "r" {
+				continue
+			}
+			for _, inner := range r.ChildElements() {
+				if inner.Space == "w" && inner.Tag == "fldChar" {
+					fldCharCount++
+				}
+				if inner.Space == "w" && inner.Tag == "instrText" {
+					instrCount++
+				}
+			}
+		}
+	}
+	if fldCharCount < 3 {
+		t.Errorf("expected at least 3 fldChar elements, got %d", fldCharCount)
+	}
+	if instrCount < 1 {
+		t.Errorf("expected at least 1 instrText element, got %d", instrCount)
+	}
+}
+
+func TestRWC_100Placeholders_SameTag(t *testing.T) {
+	t.Parallel()
+	// Scaling test: 100 occurrences of the same tag.
+	target := mustNewDoc(t)
+	for i := 0; i < 100; i++ {
+		target.AddParagraph("[<X>]")
+	}
+
+	source := rcSourceWithParagraph(t, "bulk")
+
+	count, err := target.ReplaceWithContent("[<X>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+	if count != 100 {
+		t.Errorf("count = %d, want 100", count)
+	}
+
+	n := 0
+	for _, txt := range rcBodyTexts(t, target) {
+		if strings.Contains(txt, "bulk") {
+			n++
+		}
+	}
+	if n < 100 {
+		t.Errorf("expected 'bulk' at least 100 times, got %d", n)
+	}
+}
+
+func TestRWC_DeeplyNestedTables_5Levels(t *testing.T) {
+	t.Parallel()
+	// 5-level nested table structure in source must survive copy.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcBody := source.element.Body().RawElement()
+
+	// Build 5-level nested table: each table has a single cell containing
+	// another table, down to level 5 which has text.
+	inner := `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:r><w:t>deepest cell</w:t></w:r></w:p>`
+	for i := 0; i < 5; i++ {
+		inner = `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:tr><w:tc>` + inner + `</w:tc></w:tr></w:tbl>`
+	}
+	tbl, _ := oxml.ParseXml([]byte(inner))
+	rcInsertBeforeSectPr(srcBody, tbl)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Find "deepest cell" text recursively (rcBodyTexts only scans top-level paragraphs).
+	body, _ := target.getBody()
+	found := rcFindTextRecursive(body.Element(), "deepest cell")
+	if !found {
+		t.Error("expected 'deepest cell' text from 5-level nested table")
+	}
+}
+
+func TestRWC_UnicodeTag_Cyrillic(t *testing.T) {
+	t.Parallel()
+	target := mustNewDoc(t)
+	target.AddParagraph("Начало [<СОДЕРЖАНИЕ>] Конец")
+
+	source := rcSourceWithParagraph(t, "Кириллица вставлена")
+
+	count, err := target.ReplaceWithContent("[<СОДЕРЖАНИЕ>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+
+	allText := ""
+	for _, txt := range rcBodyTexts(t, target) {
+		allText += txt
+	}
+	if !strings.Contains(allText, "Кириллица вставлена") {
+		t.Error("expected inserted cyrillic text")
+	}
+	if !strings.Contains(allText, "Начало") {
+		t.Error("surrounding cyrillic text lost")
+	}
+}
+
+func TestRWC_KeepSourceNumbering_SeparateList(t *testing.T) {
+	t.Parallel()
+	// When KeepSourceNumbering=true, source list definitions must be imported
+	// as separate lists (not merged into target).
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	// Add a numbered list to target (decimal, numId=1).
+	rcSetupNumbering(t, target, 1, 0, "decimal")
+
+	// Count baseline abstractNums before replacement.
+	tgtNP, err := target.part.GetOrAddNumberingPart()
+	if err != nil {
+		t.Fatalf("GetOrAddNumberingPart: %v", err)
+	}
+	tgtNumbering, err := tgtNP.Numbering()
+	if err != nil {
+		t.Fatalf("Numbering: %v", err)
+	}
+	absNumsBefore := len(tgtNumbering.AllAbstractNums())
+
+	// Create source with its own numbered list (decimal, numId=1).
+	source := mustNewDoc(t)
+	rcSetupNumbering(t, source, 1, 0, "decimal")
+	rcInjectNumberedParagraph(t, source, 1, 0, "Source item")
+
+	_, replaceErr := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Options: ImportFormatOptions{KeepSourceNumbering: true},
+	})
+	if replaceErr != nil {
+		t.Fatalf("ReplaceWithContent: %v", replaceErr)
+	}
+
+	// Target should have the inserted text.
+	found := false
+	for _, txt := range rcBodyTexts(t, target) {
+		if strings.Contains(txt, "Source item") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'Source item' in target")
+	}
+
+	// Target numbering should have a new abstractNum (imported separately).
+	absNumsAfter := len(tgtNumbering.AllAbstractNums())
+	if absNumsAfter <= absNumsBefore {
+		t.Errorf("expected new abstractNum (KeepSourceNumbering=true), before=%d after=%d",
+			absNumsBefore, absNumsAfter)
+	}
+}
+
+func TestRWC_KeepSourceNumbering_False_Merged(t *testing.T) {
+	t.Parallel()
+	// When KeepSourceNumbering=false (default), source list with matching
+	// numFmt should be merged into existing target list.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	// Add a numbered list to target (decimal).
+	rcSetupNumbering(t, target, 1, 0, "decimal")
+
+	// Count baseline abstractNums before replacement.
+	tgtNP, err := target.part.GetOrAddNumberingPart()
+	if err != nil {
+		t.Fatalf("GetOrAddNumberingPart: %v", err)
+	}
+	tgtNumbering, err := tgtNP.Numbering()
+	if err != nil {
+		t.Fatalf("Numbering: %v", err)
+	}
+	absNumsBefore := len(tgtNumbering.AllAbstractNums())
+
+	// Create source with its own decimal list.
+	source := mustNewDoc(t)
+	rcSetupNumbering(t, source, 1, 0, "decimal")
+	rcInjectNumberedParagraph(t, source, 1, 0, "Merged item")
+
+	_, err = target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		// KeepSourceNumbering defaults to false → merge
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	found := false
+	for _, txt := range rcBodyTexts(t, target) {
+		if strings.Contains(txt, "Merged item") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'Merged item' in target")
+	}
+
+	// With merge, no new abstractNum should have been created (matching
+	// numFmt reuses existing target definition).
+	absNumsAfter := len(tgtNumbering.AllAbstractNums())
+	if absNumsAfter != absNumsBefore {
+		t.Errorf("expected no new abstractNums (merged), got delta=%d", absNumsAfter-absNumsBefore)
+	}
+}
+
+func TestRWC_DeepImport_RoundTrip(t *testing.T) {
+	t.Parallel()
+	// Integration test: deep import with save → reopen.
+	// Use an OLE-like part (generic internal relationship) to exercise
+	// the deep import path end-to-end through ReplaceWithContent.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	source.AddParagraph("with deep part")
+
+	// Add a generic internal part to source (simulates chart/diagram).
+	genericBlob := []byte(`<?xml version="1.0"?><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>`)
+	genericPart, _ := opc.NewXmlPart(
+		"/word/charts/chart1.xml",
+		"application/vnd.openxmlformats-officedocument.drawingml.chart+xml",
+		genericBlob,
+		source.wmlPkg.OpcPackage,
+	)
+	source.wmlPkg.OpcPackage.AddPart(genericPart)
+	rel := source.part.Rels().GetOrAdd(
+		"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart",
+		genericPart,
+	)
+
+	// Inject a drawing referencing the chart via r:id.
+	srcBody := source.element.Body().RawElement()
+	p, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+			`<w:r><w:drawing><c:chart r:id="` + rel.RID + `" ` +
+			`xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/></w:drawing></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, p)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Save and reopen.
+	var buf bytes.Buffer
+	if err := target.Save(&buf); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	reopened, err := OpenBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+
+	// Verify text survived round-trip.
+	found := false
+	for _, txt := range rcBodyTexts(t, reopened) {
+		if strings.Contains(txt, "with deep part") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'with deep part' in reopened document")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Test helpers (Step 8)
+// --------------------------------------------------------------------------
+
+// rcInjectStyledParagraph injects a paragraph with pStyle into the source body.
+func rcInjectStyledParagraph(t *testing.T, doc *Document, styleId, text string) {
+	t.Helper()
+	srcBody := doc.element.Body().RawElement()
+	p, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="` + styleId + `"/></w:pPr>` +
+			`<w:r><w:t>` + text + `</w:t></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, p)
+}
+
+// rcInsertBeforeSectPr inserts an element before the first w:sectPr in body.
+func rcInsertBeforeSectPr(body, el *etree.Element) {
+	children := body.ChildElements()
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			body.InsertChildAt(i, el)
+			return
+		}
+	}
+	body.AddChild(el)
+}
+
+// rcSetupNumbering creates a numbering definition in the document with
+// the given numId, abstractNumId, and numFmt (e.g., "decimal", "bullet").
+func rcSetupNumbering(t *testing.T, doc *Document, numId, abstractNumId int, numFmt string) {
+	t.Helper()
+	np, err := doc.part.GetOrAddNumberingPart()
+	if err != nil {
+		t.Fatalf("GetOrAddNumberingPart: %v", err)
+	}
+	numbering, err := np.Numbering()
+	if err != nil {
+		t.Fatalf("Numbering: %v", err)
+	}
+
+	// Add abstractNum with a single level.
+	absNum, _ := oxml.ParseXml([]byte(
+		`<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:abstractNumId="` + strconv.Itoa(abstractNumId) + `">` +
+			`<w:nsid w:val="AABB0011"/>` +
+			`<w:lvl w:ilvl="0"><w:numFmt w:val="` + numFmt + `"/></w:lvl>` +
+			`</w:abstractNum>`,
+	))
+	numbering.InsertAbstractNum(absNum)
+
+	// Add num referencing the abstractNum.
+	numbering.AddNumWithAbstractNumId(abstractNumId)
+}
+
+// rcFindTextRecursive searches the entire element tree for a <w:t> element
+// containing the given substring. Used for deeply nested structures (tables
+// within tables) where rcBodyTexts doesn't reach.
+func rcFindTextRecursive(el *etree.Element, substr string) bool {
+	stack := []*etree.Element{el}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if node.Space == "w" && node.Tag == "t" {
+			if strings.Contains(node.Text(), substr) {
+				return true
+			}
+		}
+		stack = append(stack, node.ChildElements()...)
+	}
+	return false
+}
+
+// rcInjectNumberedParagraph injects a paragraph with numPr into the source body.
+func rcInjectNumberedParagraph(t *testing.T, doc *Document, numId, ilvl int, text string) {
+	t.Helper()
+	srcBody := doc.element.Body().RawElement()
+	p, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:numPr>` +
+			`<w:ilvl w:val="` + strconv.Itoa(ilvl) + `"/>` +
+			`<w:numId w:val="` + strconv.Itoa(numId) + `"/>` +
+			`</w:numPr></w:pPr>` +
+			`<w:r><w:t>` + text + `</w:t></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, p)
 }

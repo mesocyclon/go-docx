@@ -249,3 +249,298 @@ func TestRandomNsid(t *testing.T) {
 		t.Error("expected different nsids from two calls")
 	}
 }
+
+// --------------------------------------------------------------------------
+// firstLevelNumFmt tests
+// --------------------------------------------------------------------------
+
+func TestFirstLevelNumFmt_Decimal(t *testing.T) {
+	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`<w:lvl w:ilvl="1"><w:numFmt w:val="lowerLetter"/></w:lvl>` +
+		`</w:abstractNum>`
+	el, _ := oxml.ParseXml([]byte(xml))
+
+	got := firstLevelNumFmt(el)
+	if got != "decimal" {
+		t.Errorf("expected decimal, got %q", got)
+	}
+}
+
+func TestFirstLevelNumFmt_Bullet(t *testing.T) {
+	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
+		`<w:nsid w:val="AABBCCDD"/>` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl>` +
+		`</w:abstractNum>`
+	el, _ := oxml.ParseXml([]byte(xml))
+
+	got := firstLevelNumFmt(el)
+	if got != "bullet" {
+		t.Errorf("expected bullet, got %q", got)
+	}
+}
+
+func TestFirstLevelNumFmt_NoLevel(t *testing.T) {
+	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
+		`<w:nsid w:val="AABBCCDD"/>` +
+		`</w:abstractNum>`
+	el, _ := oxml.ParseXml([]byte(xml))
+
+	got := firstLevelNumFmt(el)
+	if got != "" {
+		t.Errorf("expected empty for no levels, got %q", got)
+	}
+}
+
+func TestFirstLevelNumFmt_NoIlvlZero(t *testing.T) {
+	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`<w:lvl w:ilvl="2"><w:numFmt w:val="lowerLetter"/></w:lvl>` +
+		`</w:abstractNum>`
+	el, _ := oxml.ParseXml([]byte(xml))
+
+	got := firstLevelNumFmt(el)
+	if got != "" {
+		t.Errorf("expected empty for no ilvl=0, got %q", got)
+	}
+}
+
+func TestFirstLevelNumFmt_NoNumFmt(t *testing.T) {
+	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:lvlText w:val="%1."/></w:lvl>` +
+		`</w:abstractNum>`
+	el, _ := oxml.ParseXml([]byte(xml))
+
+	got := firstLevelNumFmt(el)
+	if got != "" {
+		t.Errorf("expected empty for missing numFmt, got %q", got)
+	}
+}
+
+// --------------------------------------------------------------------------
+// findMatchingTargetNum tests
+// --------------------------------------------------------------------------
+
+// makeNumbering builds a CT_Numbering from XML string for tests.
+func makeNumbering(t *testing.T, xml string) *oxml.CT_Numbering {
+	t.Helper()
+	el, err := oxml.ParseXml([]byte(xml))
+	if err != nil {
+		t.Fatalf("ParseXml: %v", err)
+	}
+	return &oxml.CT_Numbering{Element: oxml.WrapElement(el)}
+}
+
+func TestFindMatchingTargetNum_Match(t *testing.T) {
+	srcXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	src := makeNumbering(t, srcXml)
+
+	tgtXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="3"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	tgt := makeNumbering(t, tgtXml)
+
+	ri := &ResourceImporter{
+		numIdMap:    make(map[int]int),
+		absNumIdMap: make(map[int]int),
+		styleMap:    make(map[string]string),
+	}
+
+	got := ri.findMatchingTargetNum(0, src, tgt, buildAbsNumToNumIdMap(tgt))
+	if got != 3 {
+		t.Errorf("expected matching target numId=3, got %d", got)
+	}
+}
+
+func TestFindMatchingTargetNum_NoMatch(t *testing.T) {
+	srcXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	src := makeNumbering(t, srcXml)
+
+	tgtXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	tgt := makeNumbering(t, tgtXml)
+
+	ri := &ResourceImporter{
+		numIdMap:    make(map[int]int),
+		absNumIdMap: make(map[int]int),
+		styleMap:    make(map[string]string),
+	}
+
+	got := ri.findMatchingTargetNum(0, src, tgt, buildAbsNumToNumIdMap(tgt))
+	if got != 0 {
+		t.Errorf("expected no match (0), got %d", got)
+	}
+}
+
+func TestFindMatchingTargetNum_BulletMatch(t *testing.T) {
+	srcXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="2">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="5"><w:abstractNumId w:val="2"/></w:num>` +
+		`</w:numbering>`
+	src := makeNumbering(t, srcXml)
+
+	tgtXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:abstractNum w:abstractNumId="1">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`<w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>` +
+		`</w:numbering>`
+	tgt := makeNumbering(t, tgtXml)
+
+	ri := &ResourceImporter{
+		numIdMap:    make(map[int]int),
+		absNumIdMap: make(map[int]int),
+		styleMap:    make(map[string]string),
+	}
+
+	got := ri.findMatchingTargetNum(2, src, tgt, buildAbsNumToNumIdMap(tgt))
+	if got != 2 {
+		t.Errorf("expected matching bullet target numId=2, got %d", got)
+	}
+}
+
+func TestFindMatchingTargetNum_EmptyTarget(t *testing.T) {
+	srcXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	src := makeNumbering(t, srcXml)
+
+	tgtXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>`
+	tgt := makeNumbering(t, tgtXml)
+
+	ri := &ResourceImporter{
+		numIdMap:    make(map[int]int),
+		absNumIdMap: make(map[int]int),
+		styleMap:    make(map[string]string),
+	}
+
+	got := ri.findMatchingTargetNum(0, src, tgt, buildAbsNumToNumIdMap(tgt))
+	if got != 0 {
+		t.Errorf("expected no match on empty target, got %d", got)
+	}
+}
+
+func TestFindMatchingTargetNum_SrcAbsNumNotFound(t *testing.T) {
+	srcXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	src := makeNumbering(t, srcXml)
+
+	tgtXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	tgt := makeNumbering(t, tgtXml)
+
+	ri := &ResourceImporter{
+		numIdMap:    make(map[int]int),
+		absNumIdMap: make(map[int]int),
+		styleMap:    make(map[string]string),
+	}
+
+	// srcAbsId=99 doesn't exist in source
+	got := ri.findMatchingTargetNum(99, src, tgt, buildAbsNumToNumIdMap(tgt))
+	if got != 0 {
+		t.Errorf("expected 0 for missing source abstractNum, got %d", got)
+	}
+}
+
+// --------------------------------------------------------------------------
+// buildAbsNumToNumIdMap tests
+// --------------------------------------------------------------------------
+
+func TestBuildAbsNumToNumIdMap(t *testing.T) {
+	xml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0"/>` +
+		`<w:abstractNum w:abstractNumId="5"/>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`<w:num w:numId="2"><w:abstractNumId w:val="5"/></w:num>` +
+		`<w:num w:numId="3"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	n := makeNumbering(t, xml)
+
+	m := buildAbsNumToNumIdMap(n)
+	if len(m) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(m))
+	}
+	// absNumId=0 → first numId=1 (not 3)
+	if m[0] != 1 {
+		t.Errorf("absNumId=0: expected numId=1, got %d", m[0])
+	}
+	// absNumId=5 → numId=2
+	if m[5] != 2 {
+		t.Errorf("absNumId=5: expected numId=2, got %d", m[5])
+	}
+}
+
+func TestBuildAbsNumToNumIdMap_Empty(t *testing.T) {
+	xml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>`
+	n := makeNumbering(t, xml)
+
+	m := buildAbsNumToNumIdMap(n)
+	if len(m) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(m))
+	}
+}
+
+// --------------------------------------------------------------------------
+// findMatchingTargetNum cache path test
+// --------------------------------------------------------------------------
+
+func TestFindMatchingTargetNum_CacheHit(t *testing.T) {
+	srcXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	src := makeNumbering(t, srcXml)
+
+	tgtXml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0">` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
+		`</w:abstractNum>` +
+		`<w:num w:numId="7"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	tgt := makeNumbering(t, tgtXml)
+
+	ri := &ResourceImporter{
+		numIdMap:    make(map[int]int),
+		absNumIdMap: map[int]int{0: -7}, // negative sentinel = previously merged to numId=7
+		styleMap:    make(map[string]string),
+	}
+
+	// Should hit cache, return 7 without scanning.
+	got := ri.findMatchingTargetNum(0, src, tgt, buildAbsNumToNumIdMap(tgt))
+	if got != 7 {
+		t.Errorf("expected cached numId=7, got %d", got)
+	}
+}

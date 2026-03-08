@@ -246,3 +246,78 @@ func TestCT_Numbering_InsertAbstractNum(t *testing.T) {
 		t.Errorf("expected second child to be num, got %s", children[1].Tag)
 	}
 }
+
+func TestCT_Numbering_AllAbstractNums(t *testing.T) {
+	xml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:abstractNum w:abstractNumId="0"><w:nsid w:val="11111111"/></w:abstractNum>` +
+		`<w:abstractNum w:abstractNumId="3"><w:nsid w:val="22222222"/></w:abstractNum>` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`<w:num w:numId="2"><w:abstractNumId w:val="3"/></w:num>` +
+		`</w:numbering>`
+	el, _ := ParseXml([]byte(xml))
+	n := &CT_Numbering{Element{e: el}}
+
+	absNums := n.AllAbstractNums()
+	if len(absNums) != 2 {
+		t.Fatalf("expected 2 abstractNums, got %d", len(absNums))
+	}
+	if absNums[0].SelectAttrValue("w:abstractNumId", "") != "0" {
+		t.Errorf("first abstractNum: expected id=0, got %s",
+			absNums[0].SelectAttrValue("w:abstractNumId", ""))
+	}
+	if absNums[1].SelectAttrValue("w:abstractNumId", "") != "3" {
+		t.Errorf("second abstractNum: expected id=3, got %s",
+			absNums[1].SelectAttrValue("w:abstractNumId", ""))
+	}
+}
+
+func TestCT_Numbering_AllAbstractNums_Empty(t *testing.T) {
+	xml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+		`</w:numbering>`
+	el, _ := ParseXml([]byte(xml))
+	n := &CT_Numbering{Element{e: el}}
+
+	absNums := n.AllAbstractNums()
+	if len(absNums) != 0 {
+		t.Errorf("expected 0 abstractNums on numbering with only nums, got %d", len(absNums))
+	}
+}
+
+func TestAbstractNumIdOf(t *testing.T) {
+	tests := []struct {
+		name string
+		xml  string
+		want int
+	}{
+		{
+			name: "valid id",
+			xml:  `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="5"/>`,
+			want: 5,
+		},
+		{
+			name: "zero id",
+			xml:  `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0"/>`,
+			want: 0,
+		},
+		{
+			name: "missing attr",
+			xml:  `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>`,
+			want: -1,
+		},
+		{
+			name: "non-numeric",
+			xml:  `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="abc"/>`,
+			want: -1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			el, _ := ParseXml([]byte(tc.xml))
+			got := AbstractNumIdOf(el)
+			if got != tc.want {
+				t.Errorf("AbstractNumIdOf() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

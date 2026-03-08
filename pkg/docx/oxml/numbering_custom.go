@@ -188,6 +188,40 @@ func NewCtString(nspTagname, val string) (*CT_String, error) {
 }
 
 // ===========================================================================
+// CT_Numbering — abstractNum enumeration and identification
+// ===========================================================================
+
+// AllAbstractNums returns all <w:abstractNum> child elements as raw etree
+// elements. Used by numbering merge logic (KeepSourceNumbering=false) to
+// scan for compatible list definitions in the target document.
+func (n *CT_Numbering) AllAbstractNums() []*etree.Element {
+	var result []*etree.Element
+	for _, child := range n.e.ChildElements() {
+		if child.Space == "w" && child.Tag == "abstractNum" {
+			result = append(result, child)
+		}
+	}
+	return result
+}
+
+// AbstractNumIdOf extracts the w:abstractNumId attribute value from a raw
+// <w:abstractNum> element. Returns -1 if the attribute is absent or invalid.
+//
+// This is a standalone function (not a method) because it operates on raw
+// etree elements rather than typed CT_* wrappers.
+func AbstractNumIdOf(el *etree.Element) int {
+	v := el.SelectAttrValue("w:abstractNumId", "")
+	if v == "" {
+		return -1
+	}
+	id, err := parseIntAttr(v)
+	if err != nil {
+		return -1
+	}
+	return id
+}
+
+// ===========================================================================
 // CT_Numbering — raw etree helpers for abstractNum management
 // ===========================================================================
 
