@@ -102,7 +102,7 @@ func main() {
 
 	log.Printf("template: %s", templatePath)
 	log.Printf("tag:      %s", *tag)
-	log.Printf("marks:    %d file(s)", len(marks))
+	log.Printf("marks:    %d file(s) × %d variant(s)", len(marks), len(allVariants()))
 	log.Printf("workers:  %d", *workers)
 
 	jobs := make(chan markEntry, len(marks))
@@ -122,14 +122,16 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for m := range jobs {
-				r := processOneMark(tplBytes, m.name, m.filename, m.path, *tag, *outputDir)
-				mu.Lock()
-				results = append(results, r)
-				mu.Unlock()
-				if r.OK {
-					log.Printf("  OK   %-40s %d replacement(s)  %s", m.filename, r.Replacements, r.Elapsed)
-				} else {
-					log.Printf("  FAIL %-40s %s", m.filename, r.Error)
+				for _, v := range allVariants() {
+					r := processOneMark(tplBytes, m.name, m.filename, m.path, *tag, *outputDir, v)
+					mu.Lock()
+					results = append(results, r)
+					mu.Unlock()
+					if r.OK {
+						log.Printf("  OK   %-40s %d replacement(s)  %s", r.Name, r.Replacements, r.Elapsed)
+					} else {
+						log.Printf("  FAIL %-40s %s", r.Name, r.Error)
+					}
 				}
 			}
 		}()
@@ -149,9 +151,43 @@ func main() {
 	log.Printf("done: %d/%d succeeded", okCount, len(results))
 }
 
-func processOneMark(tplBytes []byte, markName, markFilename, markPath, tag, outputDir string) (result regtest.FileResult) {
+// importVariant describes one ImportFormatMode + ImportFormatOptions combination
+// to exercise during batch processing. Each mark file is processed once per
+// variant, producing a separate output file with the variant's suffix.
+type importVariant struct {
+	suffix string
+	mode   docx.ImportFormatMode
+	opts   docx.ImportFormatOptions
+}
+
+func allVariants() []importVariant {
+	return []importVariant{
+		// Default: target styles win on conflict.
+		{"", docx.UseDestinationStyles, docx.ImportFormatOptions{}},
+
+		// KeepSourceFormatting: expand source style props into direct attrs.
+		{"__keep_src", docx.KeepSourceFormatting, docx.ImportFormatOptions{}},
+
+		// KeepSourceFormatting + ForceCopyStyles: copy conflicting styles
+		// with unique suffix (_0, _1, ...) instead of expanding.
+		{"__keep_src_force", docx.KeepSourceFormatting, docx.ImportFormatOptions{ForceCopyStyles: true}},
+
+		// KeepDifferentStyles: hybrid — identical formatting → use target,
+		// different formatting → expand to direct attrs.
+		{"__keep_diff", docx.KeepDifferentStyles, docx.ImportFormatOptions{}},
+
+		// KeepDifferentStyles + ForceCopyStyles: different → copy with suffix.
+		{"__keep_diff_force", docx.KeepDifferentStyles, docx.ImportFormatOptions{ForceCopyStyles: true}},
+
+		// KeepSourceNumbering: preserve source list numbering as separate
+		// definitions instead of merging into matching target lists.
+		{"__keep_num", docx.UseDestinationStyles, docx.ImportFormatOptions{KeepSourceNumbering: true}},
+	}
+}
+
+func processOneMark(tplBytes []byte, markName, markFilename, markPath, tag, outputDir string, v importVariant) (result regtest.FileResult) {
 	start := time.Now()
-	outName := markName + ".docx"
+	outName := markName + v.suffix + ".docx"
 	result.Name = outName
 
 	defer func() {
@@ -177,7 +213,11 @@ func processOneMark(tplBytes []byte, markName, markFilename, markPath, tag, outp
 		return regtest.FileResult{Name: outName, OK: false, Error: fmt.Sprintf("open mark %s: %v", markFilename, err), Elapsed: time.Since(start).String()}
 	}
 
-	n, err := tplDoc.ReplaceWithContent(tag, docx.ContentData{Source: source})
+	n, err := tplDoc.ReplaceWithContent(tag, docx.ContentData{
+		Source:  source,
+		Format:  v.mode,
+		Options: v.opts,
+	})
 	if err != nil {
 		return regtest.FileResult{Name: outName, OK: false, Error: fmt.Sprintf("replace %s: %v", tag, err), Elapsed: time.Since(start).String()}
 	}

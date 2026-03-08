@@ -105,7 +105,11 @@ func main() {
 	// Apply replacements.
 	totalCount := 0
 	for _, r := range allReplacements(openedSources) {
-		n, err := result.ReplaceWithContent(r.tag, docx.ContentData{Source: r.source})
+		n, err := result.ReplaceWithContent(r.tag, docx.ContentData{
+			Source:  r.source,
+			Format:  r.format,
+			Options: r.opts,
+		})
 		if err != nil {
 			log.Fatalf("ReplaceWithContent(%q): %v", r.tag, err)
 		}

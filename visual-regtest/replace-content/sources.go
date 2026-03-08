@@ -8,6 +8,7 @@ import (
 	"image/png"
 
 	"github.com/vortex/go-docx/pkg/docx"
+	"github.com/vortex/go-docx/pkg/docx/enum"
 	. "github.com/vortex/go-docx/visual-regtest/internal/docfmt"
 	. "github.com/vortex/go-docx/visual-regtest/internal/regtest"
 )
@@ -32,6 +33,9 @@ func allSources() []sourceSpec {
 		{"src_styled.docx", buildSrcStyled},
 		{"src_a.docx", buildSrcA},
 		{"src_b.docx", buildSrcB},
+		{"src_conflict_style.docx", buildSrcConflictStyle},
+		{"src_numbered_list.docx", buildSrcNumberedList},
+		{"src_unique_style.docx", buildSrcUniqueStyle},
 	}
 }
 
@@ -147,6 +151,59 @@ func buildSrcStyled() (*docx.Document, error) {
 	rItalic, _ := p.AddRun("курсив")
 	_ = rItalic.SetItalic(BoolPtr(true))
 	_, _ = p.AddRun(".")
+	return doc, nil
+}
+
+// buildSrcConflictStyle creates a document with Heading 1 style modified to
+// have red color and larger size. This creates a style conflict: source and
+// target both have "Heading 1" but with different formatting. Used to test
+// all three ImportFormatMode strategies.
+func buildSrcConflictStyle() (*docx.Document, error) {
+	doc := Must(docx.New())
+	// Modify Heading 1 in the source to have red color + 20pt size.
+	styles := Must(doc.Styles())
+	h1 := Must(styles.Get("Heading 1"))
+	Must0(h1.Font().Color().SetRGB(&ColorRed))
+	sz20 := docx.Pt(20)
+	Must0(h1.Font().SetSize(&sz20))
+
+	Must(doc.AddParagraph("Заголовок красный (Heading 1)", docx.StyleName("Heading 1")))
+	Must(doc.AddParagraph("Обычный абзац после заголовка."))
+	p := Must(doc.AddParagraph(""))
+	rBold, _ := p.AddRun("Жирный")
+	_ = rBold.SetBold(BoolPtr(true))
+	_, _ = p.AddRun(" и ")
+	rItalic, _ := p.AddRun("курсив")
+	_ = rItalic.SetItalic(BoolPtr(true))
+	_, _ = p.AddRun(" в одном абзаце.")
+	return doc, nil
+}
+
+// buildSrcNumberedList creates a document with a numbered list.
+// Used to test KeepSourceNumbering option.
+func buildSrcNumberedList() (*docx.Document, error) {
+	doc := Must(docx.New())
+	Must(doc.AddParagraph("Пункт 1 (нумерованный список)", docx.StyleName("List Number")))
+	Must(doc.AddParagraph("Пункт 2 (нумерованный список)", docx.StyleName("List Number")))
+	Must(doc.AddParagraph("Пункт 3 (нумерованный список)", docx.StyleName("List Number")))
+	Must(doc.AddParagraph("Обычный абзац после списка."))
+	return doc, nil
+}
+
+// buildSrcUniqueStyle creates a document with a custom style "MyCustomRed"
+// that does not exist in the target. All 3 ImportFormatMode strategies should
+// deep-copy this style into the target.
+func buildSrcUniqueStyle() (*docx.Document, error) {
+	doc := Must(docx.New())
+	styles := Must(doc.Styles())
+	custom := Must(styles.AddStyle("MyCustomRed", enum.WdStyleTypeParagraph, false))
+	Must0(custom.Font().Color().SetRGB(&ColorRed))
+	sz14 := docx.Pt(14)
+	Must0(custom.Font().SetSize(&sz14))
+	custom.SetQuickStyle(true)
+
+	Must(doc.AddParagraph("Абзац с кастомным стилем MyCustomRed.", docx.StyleName("MyCustomRed")))
+	Must(doc.AddParagraph("Обычный абзац без стиля."))
 	return doc, nil
 }
 

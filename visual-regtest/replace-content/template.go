@@ -258,6 +258,55 @@ func buildTemplate() (*docx.Document, error) {
 	TagPara(doc, "", "(<SRC_B>)", "")
 
 	// ================================================================
+	// F. IMPORT FORMAT MODE TESTS
+	// ================================================================
+	Heading(doc, "Е. ТЕСТЫ РЕЖИМОВ ИМПОРТА (ImportFormatMode)", 1)
+	Note(doc, "Источник src_conflict_style.docx: Heading 1 переопределён (красный, 20pt).")
+	Note(doc, "Источник src_numbered_list.docx: нумерованный список из 3 пунктов.")
+	Note(doc, "Источник src_unique_style.docx: кастомный стиль MyCustomRed (14pt, красный).")
+	Must(doc.AddParagraph(""))
+
+	Heading(doc, "Е1. UseDestinationStyles + конфликтующий стиль", 2)
+	SpecContent(doc, "(<IFM_USE_DEST>)", "Heading 1 с форматированием ЦЕЛЕВОГО документа (синий, стандартный)")
+	Note(doc, "Стиль target побеждает: заголовок выглядит как обычный Heading 1.")
+	TagPara(doc, "", "(<IFM_USE_DEST>)", "")
+
+	Heading(doc, "Е2. KeepSourceFormatting + конфликтующий стиль", 2)
+	SpecContent(doc, "(<IFM_KEEP_SRC>)", "Heading 1 с ИСХОДНЫМ форматированием (красный, 20pt) через direct attrs")
+	Note(doc, "Свойства источника развёрнуты в прямые атрибуты параграфа/рана.")
+	TagPara(doc, "", "(<IFM_KEEP_SRC>)", "")
+
+	Heading(doc, "Е3. KeepSourceFormatting + ForceCopyStyles", 2)
+	SpecContent(doc, "(<IFM_KEEP_SRC_FORCE>)", "Heading 1 скопирован как Heading1_0 (красный, 20pt)")
+	Note(doc, "Стиль скопирован с суффиксом _0. Вставленный контент ссылается на Heading1_0.")
+	TagPara(doc, "", "(<IFM_KEEP_SRC_FORCE>)", "")
+
+	Heading(doc, "Е4. KeepDifferentStyles + конфликтующий стиль", 2)
+	SpecContent(doc, "(<IFM_KEEP_DIFF>)", "Форматирование различается → развёрнуто в direct attrs")
+	Note(doc, "Гибрид: стили разные → поведение как KeepSourceFormatting.")
+	TagPara(doc, "", "(<IFM_KEEP_DIFF>)", "")
+
+	Heading(doc, "Е5. KeepDifferentStyles + ForceCopyStyles", 2)
+	SpecContent(doc, "(<IFM_KEEP_DIFF_FORCE>)", "Форматирование различается → стиль скопирован с суффиксом")
+	Note(doc, "Гибрид + ForceCopyStyles: разные → копия с суффиксом.")
+	TagPara(doc, "", "(<IFM_KEEP_DIFF_FORCE>)", "")
+
+	Heading(doc, "Е6. KeepSourceNumbering = true", 2)
+	SpecContent(doc, "(<IFM_KEEP_NUM>)", "Нумерованный список как отдельное определение (не слитый)")
+	Note(doc, "Нумерация сохранена как отдельный abstractNum, начинается с 1.")
+	TagPara(doc, "", "(<IFM_KEEP_NUM>)", "")
+
+	Heading(doc, "Е7. KeepSourceNumbering = false (merge)", 2)
+	SpecContent(doc, "(<IFM_MERGE_NUM>)", "Нумерованный список слит с существующим определением")
+	Note(doc, "Нумерация сливается с matching target list definition.")
+	TagPara(doc, "", "(<IFM_MERGE_NUM>)", "")
+
+	Heading(doc, "Е8. KeepSourceFormatting + уникальный стиль", 2)
+	SpecContent(doc, "(<IFM_UNIQUE_STYLE>)", "MyCustomRed (14pt, красный) — deep-copy в target")
+	Note(doc, "Стиль отсутствует в target → копируется целиком (все 3 режима согласны).")
+	TagPara(doc, "", "(<IFM_UNIQUE_STYLE>)", "")
+
+	// ================================================================
 	// E. EDGE CASES
 	// ================================================================
 	Heading(doc, "Д. ГРАНИЧНЫЕ СЛУЧАИ", 1)
