@@ -1369,6 +1369,228 @@ func TestRemoveChild_DoesNotExist(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// copyStyleToTarget — semiHidden/unhideWhenUsed tests (Step 5)
+// --------------------------------------------------------------------------
+
+func TestCopyStyleToTarget_RenamedStyle_AddsSemiHidden(t *testing.T) {
+	t.Parallel()
+	// When a style is copied under a new ID (ForceCopyStyles rename),
+	// semiHidden and unhideWhenUsed must be added to prevent clutter
+	// in Word's Style Gallery.
+	target := mustNewDoc(t)
+	source := mustNewDoc(t)
+
+	srcStyles, _ := source.part.Styles()
+	srcStyleXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Heading1">` +
+		`<w:name w:val="heading 1"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcStyleEl, _ := oxml.ParseXml([]byte(srcStyleXml))
+	srcStyles.RawElement().AddChild(srcStyleEl)
+	srcStyle := srcStyles.GetByID("Heading1")
+	if srcStyle == nil {
+		t.Fatal("source style Heading1 not found")
+	}
+
+	ri := newResourceImporter(source, target, target.wmlPkg, KeepSourceFormatting,
+		ImportFormatOptions{ForceCopyStyles: true})
+
+	if err := ri.copyStyleToTarget(srcStyle, "Heading1_0"); err != nil {
+		t.Fatalf("copyStyleToTarget: %v", err)
+	}
+
+	// Verify the clone in target has semiHidden and unhideWhenUsed.
+	tgtStyles, _ := target.part.Styles()
+	copied := tgtStyles.GetByID("Heading1_0")
+	if copied == nil {
+		t.Fatal("copied style Heading1_0 not found in target")
+	}
+	raw := copied.RawElement()
+	if findChild(raw, "w", "semiHidden") == nil {
+		t.Error("expected semiHidden on renamed style")
+	}
+	if findChild(raw, "w", "unhideWhenUsed") == nil {
+		t.Error("expected unhideWhenUsed on renamed style")
+	}
+}
+
+func TestCopyStyleToTarget_SameId_NoSemiHidden(t *testing.T) {
+	t.Parallel()
+	// When a style is copied under the SAME ID (new style, not a rename),
+	// semiHidden/unhideWhenUsed must NOT be added.
+	target := mustNewDoc(t)
+	source := mustNewDoc(t)
+
+	srcStyles, _ := source.part.Styles()
+	srcStyleXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="MyCustom">` +
+		`<w:name w:val="My Custom"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcStyleEl, _ := oxml.ParseXml([]byte(srcStyleXml))
+	srcStyles.RawElement().AddChild(srcStyleEl)
+	srcStyle := srcStyles.GetByID("MyCustom")
+
+	ri := newResourceImporter(source, target, target.wmlPkg, UseDestinationStyles,
+		ImportFormatOptions{})
+
+	if err := ri.copyStyleToTarget(srcStyle, "MyCustom"); err != nil {
+		t.Fatalf("copyStyleToTarget: %v", err)
+	}
+
+	tgtStyles, _ := target.part.Styles()
+	copied := tgtStyles.GetByID("MyCustom")
+	if copied == nil {
+		t.Fatal("copied style MyCustom not found in target")
+	}
+	raw := copied.RawElement()
+	if findChild(raw, "w", "semiHidden") != nil {
+		t.Error("semiHidden should NOT be present for same-ID copy")
+	}
+	if findChild(raw, "w", "unhideWhenUsed") != nil {
+		t.Error("unhideWhenUsed should NOT be present for same-ID copy")
+	}
+}
+
+func TestCopyStyleToTarget_RenamedStyle_PreservesExistingSemiHidden(t *testing.T) {
+	t.Parallel()
+	// If the source style already has semiHidden, copyStyleToTarget must not
+	// add a duplicate element.
+	target := mustNewDoc(t)
+	source := mustNewDoc(t)
+
+	srcStyles, _ := source.part.Styles()
+	srcStyleXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="HiddenStyle">` +
+		`<w:name w:val="Hidden Style"/>` +
+		`<w:semiHidden/>` +
+		`<w:unhideWhenUsed/>` +
+		`</w:style>`
+	srcStyleEl, _ := oxml.ParseXml([]byte(srcStyleXml))
+	srcStyles.RawElement().AddChild(srcStyleEl)
+	srcStyle := srcStyles.GetByID("HiddenStyle")
+
+	ri := newResourceImporter(source, target, target.wmlPkg, KeepSourceFormatting,
+		ImportFormatOptions{ForceCopyStyles: true})
+
+	if err := ri.copyStyleToTarget(srcStyle, "HiddenStyle_0"); err != nil {
+		t.Fatalf("copyStyleToTarget: %v", err)
+	}
+
+	tgtStyles, _ := target.part.Styles()
+	copied := tgtStyles.GetByID("HiddenStyle_0")
+	if copied == nil {
+		t.Fatal("copied style not found")
+	}
+	raw := copied.RawElement()
+
+	// Count semiHidden elements — must be exactly 1 (no duplicate).
+	count := 0
+	for _, child := range raw.ChildElements() {
+		if child.Space == "w" && child.Tag == "semiHidden" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 semiHidden, got %d", count)
+	}
+}
+
+func TestCopyStyleToTarget_RenamedStyle_DisplayNameUpdated(t *testing.T) {
+	t.Parallel()
+	// Verify display name gets " (imported)" suffix.
+	target := mustNewDoc(t)
+	source := mustNewDoc(t)
+
+	srcStyles, _ := source.part.Styles()
+	srcStyleXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Title">` +
+		`<w:name w:val="Title"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcStyleEl, _ := oxml.ParseXml([]byte(srcStyleXml))
+	srcStyles.RawElement().AddChild(srcStyleEl)
+	srcStyle := srcStyles.GetByID("Title")
+
+	ri := newResourceImporter(source, target, target.wmlPkg, KeepSourceFormatting,
+		ImportFormatOptions{ForceCopyStyles: true})
+
+	if err := ri.copyStyleToTarget(srcStyle, "Title_0"); err != nil {
+		t.Fatalf("copyStyleToTarget: %v", err)
+	}
+
+	tgtStyles, _ := target.part.Styles()
+	copied := tgtStyles.GetByID("Title_0")
+	if copied == nil {
+		t.Fatal("copied style not found")
+	}
+	nameEl := findChild(copied.RawElement(), "w", "name")
+	if nameEl == nil {
+		t.Fatal("name element not found")
+	}
+	got := nameEl.SelectAttrValue("w:val", "")
+	if got != "Title (imported)" {
+		t.Errorf("display name = %q, want %q", got, "Title (imported)")
+	}
+}
+
+// --------------------------------------------------------------------------
+// uniqueStyleId tests (Step 5)
+// --------------------------------------------------------------------------
+
+func TestUniqueStyleId_BasicSuffix(t *testing.T) {
+	t.Parallel()
+	target := mustNewDoc(t)
+	source := mustNewDoc(t)
+
+	ri := newResourceImporter(source, target, target.wmlPkg, KeepSourceFormatting,
+		ImportFormatOptions{ForceCopyStyles: true})
+
+	got := ri.uniqueStyleId("Heading1")
+	if got != "Heading1_0" {
+		t.Errorf("uniqueStyleId = %q, want %q", got, "Heading1_0")
+	}
+}
+
+func TestUniqueStyleId_SkipsExisting(t *testing.T) {
+	t.Parallel()
+	target := mustNewDoc(t)
+	source := mustNewDoc(t)
+
+	// Pre-populate target with Heading1_0.
+	tgtStyles, _ := target.part.Styles()
+	existing := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Heading1_0"><w:name w:val="h1_0"/></w:style>`
+	el, _ := oxml.ParseXml([]byte(existing))
+	tgtStyles.RawElement().AddChild(el)
+
+	ri := newResourceImporter(source, target, target.wmlPkg, KeepSourceFormatting,
+		ImportFormatOptions{ForceCopyStyles: true})
+
+	got := ri.uniqueStyleId("Heading1")
+	if got != "Heading1_1" {
+		t.Errorf("uniqueStyleId = %q, want %q (should skip existing _0)", got, "Heading1_1")
+	}
+}
+
+func TestUniqueStyleId_SkipsStyleMapCollision(t *testing.T) {
+	t.Parallel()
+	target := mustNewDoc(t)
+	source := mustNewDoc(t)
+
+	ri := newResourceImporter(source, target, target.wmlPkg, KeepSourceFormatting,
+		ImportFormatOptions{ForceCopyStyles: true})
+	// Simulate a previous import that mapped something to "Custom_0".
+	ri.styleMap["Custom_0"] = "Custom_0"
+
+	got := ri.uniqueStyleId("Custom")
+	if got != "Custom_1" {
+		t.Errorf("uniqueStyleId = %q, want %q (should skip styleMap collision)", got, "Custom_1")
+	}
+}
+
+// --------------------------------------------------------------------------
 // remapAll early exit fix — regression test
 // --------------------------------------------------------------------------
 

@@ -1629,3 +1629,379 @@ func TestDocument_SnapshotBody_PreservesTablesAndSectPr(t *testing.T) {
 		t.Fatalf("Save after restore: %v", err)
 	}
 }
+
+// --------------------------------------------------------------------------
+// ForceCopyStyles integration tests (Step 5)
+// --------------------------------------------------------------------------
+
+func TestDocument_ReplaceWithContent_ForceCopyStyles_SuffixGenerated(t *testing.T) {
+	t.Parallel()
+	// When ForceCopyStyles is true and source/target have conflicting style,
+	// the source style must be copied with _0 suffix and all pStyle refs
+	// remapped to the new ID.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/>` +
+		`<w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`<w:rPr><w:b/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	// Inject styled paragraph into source.
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="CustomTitle"/></w:pPr>` +
+			`<w:r><w:t>Styled heading</w:t></w:r></w:p>`,
+	))
+	children := srcBody.ChildElements()
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, styledP)
+			break
+		}
+	}
+
+	count, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{ForceCopyStyles: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+
+	// 1. Verify CustomTitle_0 exists in target styles.
+	tgtStyles, _ = target.part.Styles()
+	copied := tgtStyles.GetByID("CustomTitle_0")
+	if copied == nil {
+		t.Fatal("expected CustomTitle_0 style in target, not found")
+	}
+
+	// 2. Verify semiHidden and unhideWhenUsed are set.
+	raw := copied.RawElement()
+	if findChild(raw, "w", "semiHidden") == nil {
+		t.Error("expected semiHidden on CustomTitle_0")
+	}
+	if findChild(raw, "w", "unhideWhenUsed") == nil {
+		t.Error("expected unhideWhenUsed on CustomTitle_0")
+	}
+
+	// 3. Verify display name has " (imported)" suffix.
+	nameEl := findChild(raw, "w", "name")
+	if nameEl == nil {
+		t.Fatal("name element not found")
+	}
+	if got := nameEl.SelectAttrValue("w:val", ""); got != "Custom Title (imported)" {
+		t.Errorf("display name = %q, want %q", got, "Custom Title (imported)")
+	}
+
+	// 4. Verify the inserted paragraph's pStyle was remapped to CustomTitle_0.
+	body, _ := target.getBody()
+	found := false
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		pStyle := findChild(pPr, "w", "pStyle")
+		if pStyle == nil {
+			continue
+		}
+		if pStyle.SelectAttrValue("w:val", "") == "CustomTitle_0" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected pStyle remapped to CustomTitle_0 in inserted paragraph")
+	}
+
+	// 5. Verify original target CustomTitle is preserved unchanged.
+	original := tgtStyles.GetByID("CustomTitle")
+	if original == nil {
+		t.Fatal("original CustomTitle should still exist in target")
+	}
+	origPPr := findChild(original.RawElement(), "w", "pPr")
+	if origPPr != nil {
+		jc := findChild(origPPr, "w", "jc")
+		if jc == nil || jc.SelectAttrValue("w:val", "") != "left" {
+			t.Error("original CustomTitle should still have jc=left")
+		}
+	}
+}
+
+func TestDocument_ReplaceWithContent_ForceCopyStyles_RoundTrip(t *testing.T) {
+	t.Parallel()
+	// ForceCopyStyles + save + reopen must produce valid document.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<X>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`<w:rPr><w:b/></w:rPr></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="CustomTitle"/></w:pPr>` +
+			`<w:r><w:t>force copy text</w:t></w:r></w:p>`,
+	))
+	children := srcBody.ChildElements()
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, styledP)
+			break
+		}
+	}
+
+	_, err := target.ReplaceWithContent("[<X>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{ForceCopyStyles: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Save and reopen.
+	var buf bytes.Buffer
+	if err := target.Save(&buf); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	reopened, err := OpenBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+
+	// Verify text survived.
+	texts := rcBodyTexts(t, reopened)
+	found := false
+	for _, txt := range texts {
+		if strings.Contains(txt, "force copy text") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'force copy text' in reopened document")
+	}
+
+	// Verify renamed style survived round-trip.
+	reopenedStyles, _ := reopened.part.Styles()
+	if reopenedStyles.GetByID("CustomTitle_0") == nil {
+		t.Error("expected CustomTitle_0 style to survive round-trip")
+	}
+}
+
+func TestDocument_ReplaceWithContent_ForceCopyStyles_NoConflict_NoCopy(t *testing.T) {
+	t.Parallel()
+	// When ForceCopyStyles is set but the source style doesn't conflict
+	// (not present in target), it should be copied under its original ID
+	// WITHOUT semiHidden/unhideWhenUsed.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="UniqueStyle">` +
+		`<w:name w:val="Unique Style"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="UniqueStyle"/></w:pPr>` +
+			`<w:r><w:t>unique text</w:t></w:r></w:p>`,
+	))
+	children := srcBody.ChildElements()
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, styledP)
+			break
+		}
+	}
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{ForceCopyStyles: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// UniqueStyle should be copied under original ID (no conflict → no rename).
+	tgtStyles, _ := target.part.Styles()
+	copied := tgtStyles.GetByID("UniqueStyle")
+	if copied == nil {
+		t.Fatal("expected UniqueStyle in target")
+	}
+
+	// No semiHidden because it was NOT renamed.
+	raw := copied.RawElement()
+	if findChild(raw, "w", "semiHidden") != nil {
+		t.Error("semiHidden should NOT be present for non-conflicting style")
+	}
+}
+
+func TestDocument_ReplaceWithContent_KeepDifferentStyles_ForceCopy(t *testing.T) {
+	t.Parallel()
+	// KeepDifferentStyles + ForceCopyStyles: different formatting → rename.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/>` +
+		`<w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="CustomTitle"/></w:pPr>` +
+			`<w:r><w:t>different</w:t></w:r></w:p>`,
+	))
+	children := srcBody.ChildElements()
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, styledP)
+			break
+		}
+	}
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepDifferentStyles,
+		Options: ImportFormatOptions{ForceCopyStyles: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Styles differ → should be renamed to CustomTitle_0.
+	tgtStyles, _ = target.part.Styles()
+	copied := tgtStyles.GetByID("CustomTitle_0")
+	if copied == nil {
+		t.Fatal("expected CustomTitle_0 for KeepDifferentStyles + ForceCopyStyles with different formatting")
+	}
+	if findChild(copied.RawElement(), "w", "semiHidden") == nil {
+		t.Error("expected semiHidden on renamed style")
+	}
+}
+
+func TestDocument_ReplaceWithContent_KeepDifferentStyles_SameFormatting_NoRename(t *testing.T) {
+	t.Parallel()
+	// KeepDifferentStyles + ForceCopyStyles: identical formatting → use target, no copy.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	// Both styles have identical formatting (jc=center).
+	sharedXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="CustomTitle">` +
+		`<w:name w:val="Custom Title"/>` +
+		`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(sharedXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcEl, _ := oxml.ParseXml([]byte(sharedXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	srcBody := source.element.Body().RawElement()
+	styledP, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:pPr><w:pStyle w:val="CustomTitle"/></w:pPr>` +
+			`<w:r><w:t>same style</w:t></w:r></w:p>`,
+	))
+	children := srcBody.ChildElements()
+	for i, child := range children {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, styledP)
+			break
+		}
+	}
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepDifferentStyles,
+		Options: ImportFormatOptions{ForceCopyStyles: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Identical formatting → no rename, pStyle stays CustomTitle.
+	tgtStyles, _ = target.part.Styles()
+	if tgtStyles.GetByID("CustomTitle_0") != nil {
+		t.Error("expected NO rename when formatting is identical (KeepDifferentStyles)")
+	}
+
+	// Verify pStyle stayed as CustomTitle in the inserted paragraph.
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		pStyle := findChild(pPr, "w", "pStyle")
+		if pStyle != nil && pStyle.SelectAttrValue("w:val", "") == "CustomTitle" {
+			// Good — style was kept as-is.
+			return
+		}
+	}
+	t.Error("expected pStyle=CustomTitle in inserted paragraph (same formatting → use target)")
+}

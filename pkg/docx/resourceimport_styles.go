@@ -262,6 +262,17 @@ func (ri *ResourceImporter) copyStyleToTarget(srcStyle *oxml.CT_Style, targetId 
 				nameEl.CreateAttr("w:val", v+" (imported)")
 			}
 		}
+
+		// Mark renamed copy as semi-hidden to avoid polluting Word's
+		// Style Gallery with duplicate-looking entries. The style
+		// remains fully functional and auto-appears in the gallery
+		// when referenced by content (unhideWhenUsed).
+		if findChild(clone, "w", "semiHidden") == nil {
+			clone.AddChild(etree.NewElement("w:semiHidden"))
+		}
+		if findChild(clone, "w", "unhideWhenUsed") == nil {
+			clone.AddChild(etree.NewElement("w:unhideWhenUsed"))
+		}
 	}
 
 	// Remap numId inside the copied style definition (if present).
