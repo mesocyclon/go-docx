@@ -1,6 +1,7 @@
 package docx
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/beevik/etree"
@@ -1367,5 +1368,557 @@ func TestPrepareContentElements_OrphanedRIdSkipped(t *testing.T) {
 	}
 	if v := attrValue(blipCopy, "r", "embed"); v != "rId999" {
 		t.Errorf("orphaned r:embed changed to %s, expected rId999", v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Deep part import tests (Step 6)
+// ---------------------------------------------------------------------------
+
+func TestImportPartDeep_NoSubRels(t *testing.T) {
+	t.Parallel()
+	// A part with no sub-relationships is imported as before (shallow).
+	wmlPkg, _ := newTestTargetParts(t)
+
+	srcPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/vnd.openxmlformats-officedocument.chart+xml", []byte("<c:chartSpace/>"))
+	srcPart.SetRels(opc.NewRelationships("/word/charts"))
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result, err := importPartDeep(srcPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("importPartDeep: %v", err)
+	}
+
+	// Blob should be copied.
+	blob, _ := result.Blob()
+	if string(blob) != "<c:chartSpace/>" {
+		t.Errorf("blob mismatch: got %q", blob)
+	}
+
+	// Dedup map populated.
+	if _, ok := importedParts["/word/charts/chart1.xml"]; !ok {
+		t.Error("expected importedParts to contain source partname")
+	}
+
+	// Part added to package.
+	if _, ok := wmlPkg.OpcPackage.PartByName(result.PartName()); !ok {
+		t.Error("part not found in OpcPackage")
+	}
+}
+
+func TestImportPartDeep_Dedup(t *testing.T) {
+	t.Parallel()
+	// Importing the same source part twice returns the cached copy.
+	wmlPkg, _ := newTestTargetParts(t)
+
+	srcPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/xml", []byte("<c:chartSpace/>"))
+	srcPart.SetRels(opc.NewRelationships("/word/charts"))
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	first, err := importPartDeep(srcPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	second, err := importPartDeep(srcPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+
+	if first != second {
+		t.Error("expected same part instance from dedup")
+	}
+}
+
+func TestImportPartDeep_ExternalSubRel(t *testing.T) {
+	t.Parallel()
+	// Part with an external sub-relationship (e.g. hyperlink from chart).
+	wmlPkg, _ := newTestTargetParts(t)
+
+	srcBlob := []byte(`<c:chartSpace xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:externalData r:id="rId1"/></c:chartSpace>`)
+	srcPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/vnd.openxmlformats-officedocument.chart+xml", srcBlob)
+	srcRels := opc.NewRelationships("/word/charts")
+	srcRels.Add(opc.RTHyperlink, "https://example.com", nil, true)
+	srcPart.SetRels(srcRels)
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result, err := importPartDeep(srcPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("importPartDeep: %v", err)
+	}
+
+	// The new part should have the external sub-rel.
+	allRels := result.Rels().All()
+	if len(allRels) == 0 {
+		t.Fatal("expected at least 1 sub-relationship")
+	}
+	found := false
+	for _, rel := range allRels {
+		if rel.IsExternal && rel.TargetRef == "https://example.com" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected external sub-rel to https://example.com")
+	}
+}
+
+func TestImportPartDeep_GenericSubPart(t *testing.T) {
+	t.Parallel()
+	// Chart with a sub-part (style XML) — verifies recursive import.
+	wmlPkg, _ := newTestTargetParts(t)
+
+	// Sub-part: chart style.
+	subBlob := []byte("<cs:chartStyle/>")
+	subPart := newTestGenericPart(t, "/word/charts/style1.xml",
+		"application/vnd.ms-office.chartstyle+xml", subBlob)
+	subPart.SetRels(opc.NewRelationships("/word/charts"))
+
+	// Main part: chart referencing the style sub-part.
+	chartBlob := []byte(`<c:chartSpace xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:style r:id="rId1"/></c:chartSpace>`)
+	chartPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/vnd.openxmlformats-officedocument.chart+xml", chartBlob)
+	chartRels := opc.NewRelationships("/word/charts")
+	chartRels.Add("http://schemas.microsoft.com/office/2011/relationships/chartStyle",
+		"style1.xml", subPart, false)
+	chartPart.SetRels(chartRels)
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result, err := importPartDeep(chartPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("importPartDeep: %v", err)
+	}
+
+	// Verify sub-part was imported.
+	subRels := result.Rels().All()
+	if len(subRels) != 1 {
+		t.Fatalf("expected 1 sub-rel, got %d", len(subRels))
+	}
+	subTargetPart := subRels[0].TargetPart
+	if subTargetPart == nil {
+		t.Fatal("sub-rel has nil TargetPart")
+	}
+	subTargetBlob, _ := subTargetPart.Blob()
+	if string(subTargetBlob) != string(subBlob) {
+		t.Errorf("sub-part blob mismatch: got %q, want %q", subTargetBlob, subBlob)
+	}
+
+	// Both parts should be in the dedup map.
+	if len(importedParts) != 2 {
+		t.Errorf("expected 2 importedParts entries, got %d", len(importedParts))
+	}
+}
+
+func TestImportPartDeep_ImageSubRel(t *testing.T) {
+	t.Parallel()
+	// Part with an image sub-relationship (e.g. embedded image in chart).
+	wmlPkg, _ := newTestTargetParts(t)
+
+	imgBlob := []byte{0x89, 0x50, 0x4E, 0x47} // PNG header
+	imgPart := newTestImagePart(t, "/word/media/image1.png", imgBlob)
+
+	chartBlob := []byte(`<c:chartSpace xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:bg r:embed="rId1"/></c:chartSpace>`)
+	chartPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/vnd.openxmlformats-officedocument.chart+xml", chartBlob)
+	chartRels := opc.NewRelationships("/word/charts")
+	chartRels.Add(opc.RTImage, "media/image1.png", imgPart, false)
+	chartPart.SetRels(chartRels)
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result, err := importPartDeep(chartPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("importPartDeep: %v", err)
+	}
+
+	// Verify image sub-rel was created.
+	subRels := result.Rels().All()
+	found := false
+	for _, rel := range subRels {
+		if rel.RelType == opc.RTImage && !rel.IsExternal {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected image sub-relationship on imported chart")
+	}
+}
+
+func TestImportPartDeep_RIdRewriting(t *testing.T) {
+	t.Parallel()
+	// Verify that rId references in XML blobs are rewritten after
+	// sub-relationship import.
+	wmlPkg, _ := newTestTargetParts(t)
+
+	// Pre-populate target with parts so the new part gets different rIds.
+	// Add a dummy rel on the target so the sub-part gets rId2 instead of rId1.
+	subBlob := []byte("<cs:chartStyle/>")
+	subPart := newTestGenericPart(t, "/word/charts/style1.xml",
+		"application/vnd.ms-office.chartstyle+xml", subBlob)
+	subPart.SetRels(opc.NewRelationships("/word/charts"))
+
+	// Chart with explicit rId1 pointing to style sub-part.
+	chartBlob := []byte(`<c:chartSpace xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:style r:id="rId1"/></c:chartSpace>`)
+	chartPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/vnd.openxmlformats-officedocument.chart+xml", chartBlob)
+	chartRels := opc.NewRelationships("/word/charts")
+	chartRels.Add("http://schemas.microsoft.com/office/2011/relationships/chartStyle",
+		"style1.xml", subPart, false)
+	chartPart.SetRels(chartRels)
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result, err := importPartDeep(chartPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("importPartDeep: %v", err)
+	}
+
+	// The blob should have been rewritten with the new rId.
+	newBlob, _ := result.Blob()
+	newSubRels := result.Rels().All()
+	if len(newSubRels) != 1 {
+		t.Fatalf("expected 1 sub-rel, got %d", len(newSubRels))
+	}
+	newRId := newSubRels[0].RID
+
+	// Verify the blob contains the new rId, not the old one.
+	newBlobStr := string(newBlob)
+	if !strings.Contains(newBlobStr, newRId) {
+		t.Errorf("expected blob to contain new rId %q, got: %s", newRId, newBlobStr)
+	}
+}
+
+func TestImportPartDeep_MaxDepthExceeded(t *testing.T) {
+	t.Parallel()
+	// Verify that exceeding maxPartImportDepth returns an error.
+	wmlPkg, _ := newTestTargetParts(t)
+
+	srcPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/xml", []byte("<root/>"))
+	srcPart.SetRels(opc.NewRelationships("/word/charts"))
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	_, err := importPartDeep(srcPart, wmlPkg, importedParts, maxPartImportDepth+1)
+	if err == nil {
+		t.Fatal("expected error for exceeded depth")
+	}
+	if !strings.Contains(err.Error(), "depth exceeds") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestImportPartDeep_BinaryPartNotRewritten(t *testing.T) {
+	t.Parallel()
+	// Binary parts (xlsx, bin) should NOT have blob rewritten.
+	wmlPkg, _ := newTestTargetParts(t)
+
+	binBlob := []byte{0x50, 0x4B, 0x03, 0x04} // ZIP header (xlsx is a ZIP)
+	binPart := newTestGenericPart(t, "/word/embeddings/wb1.xlsx",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", binBlob)
+	binPart.SetRels(opc.NewRelationships("/word/embeddings"))
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result, err := importPartDeep(binPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("importPartDeep: %v", err)
+	}
+
+	// Binary blob should be untouched.
+	gotBlob, _ := result.Blob()
+	if string(gotBlob) != string(binBlob) {
+		t.Error("binary blob was modified — should be untouched")
+	}
+}
+
+func TestImportPartDeep_NilSubRelTarget(t *testing.T) {
+	t.Parallel()
+	// Sub-relationship with nil TargetPart is skipped (graceful).
+	wmlPkg, _ := newTestTargetParts(t)
+
+	chartPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/xml", []byte("<root/>"))
+	chartRels := opc.NewRelationships("/word/charts")
+	// Internal sub-rel with nil target (broken OOXML).
+	chartRels.Add("http://example.com/brokenrel", "missing.xml", nil, false)
+	chartPart.SetRels(chartRels)
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result, err := importPartDeep(chartPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("importPartDeep: %v", err)
+	}
+
+	// Part imported, broken sub-rel skipped.
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// No sub-rels should be created (the nil one was skipped).
+	if n := len(result.Rels().All()); n != 0 {
+		t.Errorf("expected 0 sub-rels (broken one skipped), got %d", n)
+	}
+}
+
+func TestImportPartDeep_MultiLevelRecursion(t *testing.T) {
+	t.Parallel()
+	// Three levels: chart → style → colorMapping (verifies recursive depth).
+	wmlPkg, _ := newTestTargetParts(t)
+
+	// Level 3: colorMapping.
+	colorBlob := []byte("<a:clrMap/>")
+	colorPart := newTestGenericPart(t, "/word/charts/colors1.xml",
+		"application/vnd.ms-office.chartcolorstyle+xml", colorBlob)
+	colorPart.SetRels(opc.NewRelationships("/word/charts"))
+
+	// Level 2: style → colorMapping.
+	styleBlob := []byte(`<cs:chartStyle xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cs:colorRef r:id="rId1"/></cs:chartStyle>`)
+	stylePart := newTestGenericPart(t, "/word/charts/style1.xml",
+		"application/vnd.ms-office.chartstyle+xml", styleBlob)
+	styleRels := opc.NewRelationships("/word/charts")
+	styleRels.Add("http://schemas.microsoft.com/office/2011/relationships/chartColorStyle",
+		"colors1.xml", colorPart, false)
+	stylePart.SetRels(styleRels)
+
+	// Level 1: chart → style.
+	chartBlob := []byte(`<c:chartSpace xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:style r:id="rId1"/></c:chartSpace>`)
+	chartPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/vnd.openxmlformats-officedocument.chart+xml", chartBlob)
+	chartRels := opc.NewRelationships("/word/charts")
+	chartRels.Add("http://schemas.microsoft.com/office/2011/relationships/chartStyle",
+		"style1.xml", stylePart, false)
+	chartPart.SetRels(chartRels)
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result, err := importPartDeep(chartPart, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("importPartDeep: %v", err)
+	}
+
+	// All 3 parts should be in the dedup map.
+	if len(importedParts) != 3 {
+		t.Errorf("expected 3 importedParts entries, got %d", len(importedParts))
+	}
+
+	// Level 1 → style sub-rel.
+	chartSubRels := result.Rels().All()
+	if len(chartSubRels) != 1 {
+		t.Fatalf("chart: expected 1 sub-rel, got %d", len(chartSubRels))
+	}
+
+	// Level 2 → color sub-rel.
+	importedStyle := chartSubRels[0].TargetPart
+	styleSubRels := importedStyle.Rels().All()
+	if len(styleSubRels) != 1 {
+		t.Fatalf("style: expected 1 sub-rel, got %d", len(styleSubRels))
+	}
+
+	// Level 3: color part has no further sub-rels.
+	importedColor := styleSubRels[0].TargetPart
+	colorSubRels := importedColor.Rels().All()
+	if len(colorSubRels) != 0 {
+		t.Errorf("color: expected 0 sub-rels, got %d", len(colorSubRels))
+	}
+
+	// Verify blob at each level.
+	colorResultBlob, _ := importedColor.Blob()
+	if string(colorResultBlob) != string(colorBlob) {
+		t.Errorf("color blob mismatch: got %q", colorResultBlob)
+	}
+}
+
+func TestImportPartDeep_SharedSubPartDedup(t *testing.T) {
+	t.Parallel()
+	// Two charts reference the same style sub-part — should be imported
+	// once and shared via dedup map.
+	wmlPkg, _ := newTestTargetParts(t)
+
+	// Shared sub-part.
+	subBlob := []byte("<cs:chartStyle/>")
+	sharedStyle := newTestGenericPart(t, "/word/charts/style1.xml",
+		"application/vnd.ms-office.chartstyle+xml", subBlob)
+	sharedStyle.SetRels(opc.NewRelationships("/word/charts"))
+
+	// Chart 1 → sharedStyle.
+	chart1 := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/xml", []byte("<c:chart1/>"))
+	chart1Rels := opc.NewRelationships("/word/charts")
+	chart1Rels.Add("http://schemas.microsoft.com/office/2011/relationships/chartStyle",
+		"style1.xml", sharedStyle, false)
+	chart1.SetRels(chart1Rels)
+
+	// Chart 2 → sharedStyle.
+	chart2 := newTestGenericPart(t, "/word/charts/chart2.xml",
+		"application/xml", []byte("<c:chart2/>"))
+	chart2Rels := opc.NewRelationships("/word/charts")
+	chart2Rels.Add("http://schemas.microsoft.com/office/2011/relationships/chartStyle",
+		"style1.xml", sharedStyle, false)
+	chart2.SetRels(chart2Rels)
+
+	importedParts := map[opc.PackURI]opc.Part{}
+	result1, err := importPartDeep(chart1, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("chart1: %v", err)
+	}
+	result2, err := importPartDeep(chart2, wmlPkg, importedParts, 0)
+	if err != nil {
+		t.Fatalf("chart2: %v", err)
+	}
+
+	// 3 unique source parts: chart1, chart2, sharedStyle.
+	if len(importedParts) != 3 {
+		t.Errorf("expected 3 importedParts, got %d", len(importedParts))
+	}
+
+	// Both charts' style sub-rels should point to the SAME target part.
+	style1 := result1.Rels().All()[0].TargetPart
+	style2 := result2.Rels().All()[0].TargetPart
+	if style1 != style2 {
+		t.Error("shared sub-part should be deduplicated across charts")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// isXmlContentType tests (Step 6)
+// ---------------------------------------------------------------------------
+
+func TestIsXmlContentType(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		ct   string
+		want bool
+	}{
+		{"application/vnd.openxmlformats-officedocument.chart+xml", true},
+		{"application/xml", true},
+		{"text/xml", true},
+		{"application/vnd.ms-office.chartstyle+xml", true},
+		{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", false},
+		{"application/octet-stream", false},
+		{"image/png", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		got := isXmlContentType(tc.ct)
+		if got != tc.want {
+			t.Errorf("isXmlContentType(%q) = %v, want %v", tc.ct, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rewriteRIdsInBlob tests (Step 6)
+// ---------------------------------------------------------------------------
+
+func TestRewriteRIdsInBlob_RemapsAttributes(t *testing.T) {
+	t.Parallel()
+	blob := []byte(`<c:chartSpace xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:style r:id="rId1"/><c:data r:id="rId2"/></c:chartSpace>`)
+	ridMap := map[string]string{"rId1": "rId5", "rId2": "rId6"}
+
+	result, err := rewriteRIdsInBlob(blob, ridMap)
+	if err != nil {
+		t.Fatalf("rewriteRIdsInBlob: %v", err)
+	}
+
+	resultStr := string(result)
+	if !strings.Contains(resultStr, "rId5") {
+		t.Error("expected rId1 → rId5 in result")
+	}
+	if !strings.Contains(resultStr, "rId6") {
+		t.Error("expected rId2 → rId6 in result")
+	}
+	if strings.Contains(resultStr, `"rId1"`) || strings.Contains(resultStr, `"rId2"`) {
+		t.Error("old rIds should not remain")
+	}
+}
+
+func TestRewriteRIdsInBlob_InvalidXml(t *testing.T) {
+	t.Parallel()
+	blob := []byte("not xml at all {{{")
+	ridMap := map[string]string{"rId1": "rId5"}
+
+	_, err := rewriteRIdsInBlob(blob, ridMap)
+	if err == nil {
+		t.Error("expected error for invalid XML")
+	}
+}
+
+func TestRewriteRIdsInBlob_EmptyMap(t *testing.T) {
+	t.Parallel()
+	blob := []byte(`<root xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><child r:id="rId1"/></root>`)
+
+	// Empty map — should still succeed (no-op).
+	result, err := rewriteRIdsInBlob(blob, map[string]string{})
+	if err != nil {
+		t.Fatalf("rewriteRIdsInBlob: %v", err)
+	}
+	if !strings.Contains(string(result), "rId1") {
+		t.Error("rId1 should remain unchanged with empty map")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// importGenericPart deep integration test (Step 6)
+// ---------------------------------------------------------------------------
+
+func TestImportGenericPart_DeepCopiesSubRels(t *testing.T) {
+	t.Parallel()
+	// End-to-end: importGenericPart (the entry point) should deep-copy
+	// a chart with a style sub-part.
+	wmlPkg, targetSP := newTestTargetParts(t)
+
+	// Sub-part.
+	subBlob := []byte("<cs:chartStyle/>")
+	subPart := newTestGenericPart(t, "/word/charts/style1.xml",
+		"application/vnd.ms-office.chartstyle+xml", subBlob)
+	subPart.SetRels(opc.NewRelationships("/word/charts"))
+
+	// Main chart part with sub-rel.
+	chartBlob := []byte("<c:chartSpace/>")
+	chartPart := newTestGenericPart(t, "/word/charts/chart1.xml",
+		"application/vnd.openxmlformats-officedocument.chart+xml", chartBlob)
+	chartRels := opc.NewRelationships("/word/charts")
+	chartRels.Add("http://schemas.microsoft.com/office/2011/relationships/chartStyle",
+		"style1.xml", subPart, false)
+	chartPart.SetRels(chartRels)
+
+	srcRel := &opc.Relationship{
+		RID:        "rId10",
+		RelType:    opc.RTChart,
+		TargetRef:  "charts/chart1.xml",
+		TargetPart: chartPart,
+	}
+	importedParts := map[opc.PackURI]opc.Part{}
+
+	rId, err := importGenericPart(srcRel, targetSP, wmlPkg, importedParts)
+	if err != nil {
+		t.Fatalf("importGenericPart: %v", err)
+	}
+
+	// Verify top-level relationship.
+	rel := targetSP.Rels().GetByRID(rId)
+	if rel == nil {
+		t.Fatal("relationship not found")
+	}
+	if rel.RelType != opc.RTChart {
+		t.Errorf("relType = %s, want RTChart", rel.RelType)
+	}
+
+	// Verify chart has sub-rels (deep import worked).
+	chartTarget := rel.TargetPart
+	chartSubRels := chartTarget.Rels().All()
+	if len(chartSubRels) != 1 {
+		t.Fatalf("expected 1 chart sub-rel, got %d", len(chartSubRels))
+	}
+
+	// Verify sub-part blob.
+	subTarget := chartSubRels[0].TargetPart
+	gotSubBlob, _ := subTarget.Blob()
+	if string(gotSubBlob) != string(subBlob) {
+		t.Errorf("sub-part blob = %q, want %q", gotSubBlob, subBlob)
+	}
+
+	// Both parts in dedup map.
+	if len(importedParts) != 2 {
+		t.Errorf("expected 2 importedParts, got %d", len(importedParts))
 	}
 }

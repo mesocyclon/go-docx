@@ -269,8 +269,9 @@ func importRelationship(
 	return importGenericPart(srcRel, targetPart, targetPkg, importedParts)
 }
 
-// importGenericPart copies a non-image internal part from source to target.
-// Allocates a new partname in the target package and creates the relationship.
+// importGenericPart copies a non-image internal part from source to target,
+// including all sub-relationships (deep copy). Delegates to importPartDeep
+// for recursive sub-relationship import.
 //
 // importedParts provides dedup: if the same source part (by PartName) was
 // already imported, the existing target part is reused — only a new
@@ -286,37 +287,212 @@ func importGenericPart(
 	srcPart := srcRel.TargetPart
 	srcPN := srcPart.PartName()
 
-	// Check dedup map first.
+	// Dedup: same source part already imported.
 	if existing, ok := importedParts[srcPN]; ok {
 		rel := targetPart.Rels().GetOrAdd(srcRel.RelType, existing)
 		return rel.RID, nil
 	}
 
-	blob, err := srcPart.Blob()
+	// Deep import the part and its sub-relationships.
+	newPart, err := importPartDeep(srcPart, targetPkg, importedParts, 0)
 	if err != nil {
-		return "", fmt.Errorf("reading part blob: %w", err)
+		return "", err
 	}
 
-	// Compute new partname. Use the source partname's directory + extension
-	// pattern for NextPartname.
+	// Create relationship from caller's part to the new part.
+	targetRef := newPart.PartName().RelativeRef(targetPart.Rels().BaseURI())
+	rel := targetPart.Rels().Add(srcRel.RelType, targetRef, newPart, false)
+	return rel.RID, nil
+}
+
+// importPartDeep recursively copies an internal part and all its
+// sub-relationships into the target package.
+//
+// Pipeline per part:
+//  1. Copy blob into target with fresh partname.
+//  2. For each sub-relationship of source part:
+//     - External → GetOrAddExtRel on new part.
+//     - Image → SHA-256 dedup (GetOrAddImagePart) + relate on new part.
+//     - Internal → RECURSE (importPartDeep with depth+1) + relate on new part.
+//  3. If part is XML and has remapped sub-rIds → rewrite rIds in blob.
+//
+// importedParts is shared across the entire ReplaceWithContent call
+// (passed from ResourceImporter) so parts are never duplicated.
+//
+// maxPartImportDepth guards against infinite recursion on malformed OOXML
+// (real documents never exceed 3–4 levels).
+func importPartDeep(
+	srcPart opc.Part,
+	targetPkg *parts.WmlPackage,
+	importedParts map[opc.PackURI]opc.Part,
+	depth int,
+) (opc.Part, error) {
+	if depth > maxPartImportDepth {
+		return nil, fmt.Errorf("docx: part import depth exceeds %d for %s",
+			maxPartImportDepth, srcPart.PartName())
+	}
+
+	srcPN := srcPart.PartName()
+
+	// Dedup check.
+	if existing, ok := importedParts[srcPN]; ok {
+		return existing, nil
+	}
+
+	// 1. Copy blob.
+	blob, err := srcPart.Blob()
+	if err != nil {
+		return nil, fmt.Errorf("docx: reading part blob %s: %w", srcPN, err)
+	}
+
 	template := partNameTemplate(srcPN)
 	newPN := targetPkg.OpcPackage.NextPartname(template)
 
-	// Create a BasePart copy in the target package.
-	// Initialize empty Rels so IterParts (called during Save) does not
-	// panic on part.Rels().All(). Sub-relationships of the source part
-	// are NOT imported (shallow copy — see §13 of the plan).
 	newPart := opc.NewBasePart(newPN, srcPart.ContentType(), blob, targetPkg.OpcPackage)
 	newPart.SetRels(opc.NewRelationships(newPN.BaseURI()))
 	targetPkg.OpcPackage.AddPart(newPart)
-
-	// Record in dedup map.
 	importedParts[srcPN] = newPart
 
-	// Create relationship.
-	targetRef := newPN.RelativeRef(targetPart.Rels().BaseURI())
-	rel := targetPart.Rels().Add(srcRel.RelType, targetRef, newPart, false)
+	// 2. Import sub-relationships.
+	srcSubRels := srcPart.Rels()
+	if srcSubRels == nil {
+		return newPart, nil
+	}
+	allSubs := srcSubRels.All()
+	if len(allSubs) == 0 {
+		return newPart, nil
+	}
+
+	subRidMap := make(map[string]string, len(allSubs))
+
+	for _, subRel := range allSubs {
+		newRId, err := importSubRelationship(subRel, newPart, targetPkg, importedParts, depth)
+		if err != nil {
+			// Graceful degradation: skip broken sub-relationship rather
+			// than failing the entire document import. The parent part
+			// blob is still valid, just missing this one sub-resource.
+			continue
+		}
+		if newRId != "" && newRId != subRel.RID {
+			subRidMap[subRel.RID] = newRId
+		}
+	}
+
+	// 3. Rewrite rIds in blob if it's XML and has remappings.
+	if len(subRidMap) > 0 && isXmlContentType(newPart.ContentType()) {
+		if rewritten, err := rewriteRIdsInBlob(blob, subRidMap); err == nil {
+			newPart.SetBlob(rewritten)
+		}
+		// Parse failure → keep original blob (graceful degradation).
+	}
+
+	return newPart, nil
+}
+
+// maxPartImportDepth limits recursion depth in importPartDeep. Real OOXML
+// documents never exceed 3–4 levels (chart → style/colors/embedding).
+const maxPartImportDepth = 10
+
+// importSubRelationship imports a single sub-relationship of a part being
+// deep-copied. Handles external, image, and generic internal sub-rels.
+//
+// Returns the new rId on the newPart's Rels, or empty string if the sub-rel
+// was skipped (nil target, etc.).
+func importSubRelationship(
+	subRel *opc.Relationship,
+	newPart *opc.BasePart,
+	targetPkg *parts.WmlPackage,
+	importedParts map[opc.PackURI]opc.Part,
+	parentDepth int,
+) (string, error) {
+	// External sub-relationship (e.g. hyperlink from chart).
+	if subRel.IsExternal {
+		rId := newPart.Rels().GetOrAddExtRel(subRel.RelType, subRel.TargetRef)
+		return rId, nil
+	}
+
+	if subRel.TargetPart == nil {
+		return "", nil
+	}
+
+	// Image sub-rel → SHA-256 dedup via WmlPackage.
+	if subRel.RelType == opc.RTImage {
+		return importImageSubRel(subRel, newPart, targetPkg)
+	}
+
+	// Generic sub-part → RECURSE.
+	subPart, err := importPartDeep(
+		subRel.TargetPart, targetPkg, importedParts, parentDepth+1,
+	)
+	if err != nil {
+		return "", err
+	}
+	subRef := subPart.PartName().RelativeRef(newPart.Rels().BaseURI())
+	rel := newPart.Rels().Add(subRel.RelType, subRef, subPart, false)
 	return rel.RID, nil
+}
+
+// importImageSubRel imports an image sub-relationship onto newPart.
+// Uses SHA-256 dedup via WmlPackage.GetOrAddImagePart.
+//
+// Extracted to keep importSubRelationship readable.
+func importImageSubRel(
+	subRel *opc.Relationship,
+	newPart *opc.BasePart,
+	targetPkg *parts.WmlPackage,
+) (string, error) {
+	srcIP, ok := subRel.TargetPart.(*parts.ImagePart)
+	if !ok {
+		return "", fmt.Errorf("docx: image sub-rel target is %T, want *ImagePart",
+			subRel.TargetPart)
+	}
+	imgBlob, err := srcIP.Blob()
+	if err != nil {
+		return "", fmt.Errorf("docx: reading image sub-rel blob: %w", err)
+	}
+
+	cloneIP := parts.NewImagePart(srcIP.PartName(), srcIP.ContentType(), imgBlob, nil)
+	cloneIP.SetFilename(srcIP.Filename())
+	// Copy image dimensions/DPI if available.
+	if w, err := srcIP.PxWidth(); err == nil {
+		if h, errH := srcIP.PxHeight(); errH == nil {
+			if hDpi, errD := srcIP.HorzDpi(); errD == nil {
+				if vDpi, errV := srcIP.VertDpi(); errV == nil {
+					cloneIP.SetImageMeta(w, h, hDpi, vDpi)
+				}
+			}
+		}
+	}
+
+	dedupIP, err := targetPkg.GetOrAddImagePart(cloneIP)
+	if err != nil {
+		return "", fmt.Errorf("docx: dedup image sub-rel: %w", err)
+	}
+	rel := newPart.Rels().GetOrAdd(opc.RTImage, dedupIP)
+	return rel.RID, nil
+}
+
+// isXmlContentType returns true if the content type indicates XML data
+// (e.g. "application/vnd.openxmlformats-officedocument.chart+xml" or
+// "application/xml"). Binary content types (xlsx, bin) return false.
+func isXmlContentType(ct string) bool {
+	return strings.HasSuffix(ct, "+xml") || strings.HasSuffix(ct, "/xml")
+}
+
+// rewriteRIdsInBlob parses an XML blob, remaps relationship-reference
+// attributes (r:id, r:embed, r:link) using ridMap, and re-serializes.
+// Uses the same remapRIds function used for body elements.
+func rewriteRIdsInBlob(blob []byte, ridMap map[string]string) ([]byte, error) {
+	doc := etree.NewDocument()
+	if err := doc.ReadFromBytes(blob); err != nil {
+		return nil, err
+	}
+	root := doc.Root()
+	if root == nil {
+		return nil, fmt.Errorf("docx: empty XML document in part blob")
+	}
+	remapRIds([]*etree.Element{root}, ridMap)
+	return doc.WriteToBytes()
 }
 
 // --------------------------------------------------------------------------
