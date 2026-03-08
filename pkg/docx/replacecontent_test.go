@@ -1063,3 +1063,319 @@ func TestDocument_ReplaceWithContent_MultipleSourceTypes(t *testing.T) {
 		t.Error("expected at least 1 table from source B")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Body snapshot / rollback tests (Step 1 — protection against corruption)
+// ---------------------------------------------------------------------------
+
+func TestDocument_SnapshotBody_RestoresOnRestore(t *testing.T) {
+	doc := mustNewDoc(t)
+	doc.AddParagraph("original paragraph")
+
+	// Take snapshot.
+	snap, err := doc.snapshotBody()
+	if err != nil {
+		t.Fatalf("snapshotBody: %v", err)
+	}
+
+	// Mutate body.
+	doc.AddParagraph("added after snapshot")
+
+	// Before restore: should see both paragraphs.
+	texts := rcBodyTexts(t, doc)
+	foundAdded := false
+	for _, txt := range texts {
+		if strings.Contains(txt, "added after snapshot") {
+			foundAdded = true
+		}
+	}
+	if !foundAdded {
+		t.Fatal("expected 'added after snapshot' before restore")
+	}
+
+	// Restore.
+	doc.restoreBody(snap)
+
+	// After restore: should only see original paragraph.
+	texts = rcBodyTexts(t, doc)
+	for _, txt := range texts {
+		if strings.Contains(txt, "added after snapshot") {
+			t.Error("'added after snapshot' should not exist after restore")
+		}
+	}
+	foundOrig := false
+	for _, txt := range texts {
+		if strings.Contains(txt, "original paragraph") {
+			foundOrig = true
+		}
+	}
+	if !foundOrig {
+		t.Error("expected 'original paragraph' after restore")
+	}
+}
+
+func TestDocument_SnapshotBody_IndependentCopy(t *testing.T) {
+	doc := mustNewDoc(t)
+	doc.AddParagraph("immutable text")
+
+	snap, err := doc.snapshotBody()
+	if err != nil {
+		t.Fatalf("snapshotBody: %v", err)
+	}
+
+	// Mutate body by clearing it.
+	body, err := doc.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	body.ClearContent()
+
+	// Snapshot should still contain the original text.
+	// Verify by restoring and checking.
+	doc.restoreBody(snap)
+	texts := rcBodyTexts(t, doc)
+	found := false
+	for _, txt := range texts {
+		if strings.Contains(txt, "immutable text") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("snapshot was mutated — expected 'immutable text' after restore")
+	}
+}
+
+func TestDocument_ReplaceWithContent_BodyPreservedOnSuccess(t *testing.T) {
+	target := mustNewDoc(t)
+	target.AddParagraph("keep this")
+	target.AddParagraph("[<TAG>]")
+
+	source := rcSourceWithParagraph(t, "inserted content")
+
+	count, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+
+	// Body should be modified (not rolled back).
+	afterTexts := rcBodyTexts(t, target)
+
+	// "keep this" should still be there.
+	foundKeep := false
+	for _, txt := range afterTexts {
+		if strings.Contains(txt, "keep this") {
+			foundKeep = true
+		}
+	}
+	if !foundKeep {
+		t.Error("expected 'keep this' to remain after successful replacement")
+	}
+
+	// "inserted content" should be there.
+	foundInserted := false
+	for _, txt := range afterTexts {
+		if strings.Contains(txt, "inserted content") {
+			foundInserted = true
+		}
+	}
+	if !foundInserted {
+		t.Error("expected 'inserted content' after successful replacement")
+	}
+
+	// "[<TAG>]" should be gone.
+	for _, txt := range afterTexts {
+		if strings.Contains(txt, "[<TAG>]") {
+			t.Error("tag should have been replaced")
+		}
+	}
+}
+
+func TestDocument_ReplaceWithContent_BodyUntouchedOnEarlyError(t *testing.T) {
+	// NilSource triggers an early return BEFORE snapshotBody is called
+	// (line 622 returns before line 626). The defer does not fire because
+	// snap is never created. This verifies the pre-snapshot guard path:
+	// body must remain intact.
+	target := mustNewDoc(t)
+	target.AddParagraph("before")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: nil})
+	if err == nil {
+		t.Fatal("expected error for nil source")
+	}
+
+	// Body should be untouched — no snapshot, no mutation, no restore.
+	texts := rcBodyTexts(t, target)
+	found := false
+	for _, txt := range texts {
+		if strings.Contains(txt, "before") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("body should be untouched after nil source error")
+	}
+}
+
+func TestDocument_ReplaceWithContent_BodyRolledBackOnPostMutationError(t *testing.T) {
+	// This test verifies the defer-triggered rollback: body is mutated
+	// by successful replacement, but a later phase (comments) fails,
+	// and the defer restores the body to its pre-call state.
+	//
+	// Setup: wire a broken CommentsPart (nil root element) into the
+	// target. HasCommentsPart() returns true (relationship exists with
+	// non-nil TargetPart), but CommentsElement() returns error because
+	// the XmlPart has no root element.
+	//
+	// Pipeline execution:
+	//   1. Phase 1 (import resources)     — succeeds (simple source)
+	//   2. Body prep                       — succeeds
+	//   3. Body replacement                — succeeds, body MUTATED
+	//   4. Headers/footers                 — succeeds (no tags in headers)
+	//   5. Comments                        — FAILS (nil element)
+	//   6. defer fires                     — body RESTORED
+	target := mustNewDoc(t)
+	target.AddParagraph("original text")
+	target.AddParagraph("[<TAG>]")
+
+	// Wire a broken CommentsPart: XmlPart with no root element.
+	// NewXmlPart parses the XML proc-inst but there's no root element,
+	// so Element() returns nil and CommentsElement() returns error.
+	brokenXP, err := opc.NewXmlPart(
+		"/word/comments.xml", opc.CTWmlComments,
+		[]byte(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`),
+		target.wmlPkg.OpcPackage,
+	)
+	if err != nil {
+		t.Fatalf("NewXmlPart: %v", err)
+	}
+	if brokenXP.Element() != nil {
+		t.Fatal("precondition failed: expected nil root element")
+	}
+	brokenCP := parts.NewCommentsPart(brokenXP)
+	target.Part().Rels().GetOrAdd(opc.RTComments, brokenCP)
+
+	source := rcSourceWithParagraph(t, "inserted text")
+
+	_, err = target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err == nil {
+		t.Fatal("expected error from broken comments part")
+	}
+
+	// Body should be rolled back to its pre-call state.
+	texts := rcBodyTexts(t, target)
+	foundOriginal := false
+	foundTag := false
+	for _, txt := range texts {
+		if strings.Contains(txt, "original text") {
+			foundOriginal = true
+		}
+		if strings.Contains(txt, "[<TAG>]") {
+			foundTag = true
+		}
+		if strings.Contains(txt, "inserted text") {
+			t.Error("body should have been rolled back — 'inserted text' must not be present")
+		}
+	}
+	if !foundOriginal {
+		t.Error("expected 'original text' to survive rollback")
+	}
+	if !foundTag {
+		t.Error("expected '[<TAG>]' to be restored after rollback")
+	}
+
+	// Document must remain saveable after rollback.
+	var buf bytes.Buffer
+	if err := target.Save(&buf); err != nil {
+		t.Fatalf("Save after rollback: %v", err)
+	}
+}
+
+func TestDocument_SnapshotBody_RoundTrip(t *testing.T) {
+	// Verify that snapshot/restore produces a valid document that can be saved.
+	doc := mustNewDoc(t)
+	doc.AddParagraph("paragraph one")
+	doc.AddParagraph("paragraph two")
+
+	snap, err := doc.snapshotBody()
+	if err != nil {
+		t.Fatalf("snapshotBody: %v", err)
+	}
+
+	// Mutate.
+	doc.AddParagraph("paragraph three")
+
+	// Restore.
+	doc.restoreBody(snap)
+
+	// Save and reopen — document must be valid.
+	var buf bytes.Buffer
+	if err := doc.Save(&buf); err != nil {
+		t.Fatalf("Save after restore: %v", err)
+	}
+
+	doc2, err := OpenBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes after restore: %v", err)
+	}
+
+	texts := rcBodyTexts(t, doc2)
+	foundOne := false
+	foundTwo := false
+	for _, txt := range texts {
+		if strings.Contains(txt, "paragraph one") {
+			foundOne = true
+		}
+		if strings.Contains(txt, "paragraph two") {
+			foundTwo = true
+		}
+		if strings.Contains(txt, "paragraph three") {
+			t.Error("'paragraph three' should not exist after restore")
+		}
+	}
+	if !foundOne {
+		t.Error("expected 'paragraph one' in round-tripped document")
+	}
+	if !foundTwo {
+		t.Error("expected 'paragraph two' in round-tripped document")
+	}
+}
+
+func TestDocument_SnapshotBody_PreservesTablesAndSectPr(t *testing.T) {
+	doc := mustNewDoc(t)
+	doc.AddParagraph("text before table")
+	doc.AddTable(2, 3)
+	doc.AddParagraph("text after table")
+
+	snap, err := doc.snapshotBody()
+	if err != nil {
+		t.Fatalf("snapshotBody: %v", err)
+	}
+
+	// Clear everything.
+	body, err := doc.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	body.ClearContent()
+
+	// Restore.
+	doc.restoreBody(snap)
+
+	// Check tables preserved.
+	paras, tables := rcCountBodyElements(t, doc)
+	if tables < 1 {
+		t.Errorf("expected at least 1 table after restore, got %d", tables)
+	}
+	if paras < 2 {
+		t.Errorf("expected at least 2 paragraphs after restore, got %d", paras)
+	}
+
+	// Verify document is still saveable (sectPr preserved).
+	var buf bytes.Buffer
+	if err := doc.Save(&buf); err != nil {
+		t.Fatalf("Save after restore: %v", err)
+	}
+}

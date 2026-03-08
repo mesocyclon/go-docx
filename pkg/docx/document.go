@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/beevik/etree"
 	"github.com/vortex/go-docx/pkg/docx/enum"
 	"github.com/vortex/go-docx/pkg/docx/oxml"
 	"github.com/vortex/go-docx/pkg/docx/parts"
@@ -527,6 +528,62 @@ func (d *Document) replaceWithTableInComments(old string, td TableData) (int, er
 }
 
 // --------------------------------------------------------------------------
+// Body snapshot — rollback protection for ReplaceWithContent
+// --------------------------------------------------------------------------
+
+// bodySnapshot captures the state of the <w:body> element before mutation,
+// allowing rollback if an error occurs during content replacement.
+//
+// The snapshot is a deep copy of the entire body element tree via
+// etree.Element.Copy(). This is the same mechanism used throughout
+// the project for element cloning.
+//
+// Limitations (documented for callers):
+//   - Orphan parts: if an error occurs after AddPart() for images or
+//     generic parts, those parts remain in the OpcPackage (RemovePart
+//     does not exist). Orphan parts are harmless — Word ignores them.
+//   - Styles/numbering: resources imported in Phase 1 are not rolled back.
+//     Unused styles and numbering definitions are harmless.
+//   - For full rollback including orphan parts, callers may use the
+//     save-before / reopen-on-error pattern:
+//
+//     buf := new(bytes.Buffer)
+//     doc.Save(buf)
+//     count, err := doc.ReplaceWithContent(tag, cd)
+//     if err != nil {
+//         doc, _ = OpenBytes(buf.Bytes())
+//     }
+type bodySnapshot struct {
+	bodyEl *etree.Element // deep copy of <w:body>
+}
+
+// snapshotBody creates a deep copy of the current <w:body> element.
+func (d *Document) snapshotBody() (*bodySnapshot, error) {
+	b, err := d.getBody()
+	if err != nil {
+		return nil, err
+	}
+	return &bodySnapshot{bodyEl: b.Element().Copy()}, nil
+}
+
+// restoreBody replaces the current <w:body> with the snapshot copy,
+// effectively undoing any mutations applied after the snapshot was taken.
+//
+// API chain (verified):
+//
+//	d.element         → *oxml.CT_Document (embeds oxml.Element)
+//	d.element.RawElement()  → *etree.Element  (<w:document>)
+//	d.element.Body()        → *oxml.CT_Body
+//	body.RawElement()       → *etree.Element  (<w:body>)
+func (d *Document) restoreBody(snap *bodySnapshot) {
+	docEl := d.element.RawElement() // <w:document> etree element
+	oldBody := d.element.Body().RawElement()
+	docEl.RemoveChild(oldBody)
+	docEl.AddChild(snap.bodyEl)
+	d.body = nil // invalidate cached Body proxy
+}
+
+// --------------------------------------------------------------------------
 // Phase 5: ReplaceWithContent — public API + helpers
 // --------------------------------------------------------------------------
 
@@ -553,9 +610,11 @@ func (d *Document) replaceWithTableInComments(old string, td TableData) (int, er
 //
 // Returns the number of replacements performed.
 //
-// On error, the document may be partially modified. The returned count
-// reflects replacements completed before the error.
-func (d *Document) ReplaceWithContent(old string, cd ContentData) (int, error) {
+// On error, the document body is rolled back to its pre-call state via an
+// internal snapshot. Resources imported in Phase 1 (styles, numbering,
+// footnotes, endnotes) and any orphan parts are not rolled back but are
+// harmless — Word ignores unused definitions.
+func (d *Document) ReplaceWithContent(old string, cd ContentData) (count int, err error) {
 	if old == "" {
 		return 0, nil
 	}
@@ -563,10 +622,21 @@ func (d *Document) ReplaceWithContent(old string, cd ContentData) (int, error) {
 		return 0, fmt.Errorf("docx: ContentData.Source is nil")
 	}
 
+	// Snapshot body before any mutation so we can restore on error.
+	snap, snapErr := d.snapshotBody()
+	if snapErr != nil {
+		return 0, fmt.Errorf("docx: creating body snapshot: %w", snapErr)
+	}
+	defer func() {
+		if err != nil && snap != nil {
+			d.restoreBody(snap)
+		}
+	}()
+
 	// ResourceImporter coordinates resource transfer for this call.
 	// Shared across body, headers, footers, and comments so that styles,
 	// numbering, footnotes, and part blobs are imported exactly once.
-	ri := newResourceImporter(cd.Source, d, d.wmlPkg)
+	ri := newResourceImporter(cd.Source, d, d.wmlPkg, cd.Format, cd.Options)
 
 	// Phase 1: import resources from source (once).
 	// Numbering must run before styles (styles may reference numId).
@@ -598,7 +668,7 @@ func (d *Document) ReplaceWithContent(old string, cd ContentData) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	count, err := b.replaceWithContent(old, bodyPrep, bw)
+	count, err = b.replaceWithContent(old, bodyPrep, bw)
 	if err != nil {
 		return count, err
 	}

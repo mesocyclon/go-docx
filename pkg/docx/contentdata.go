@@ -24,6 +24,66 @@ import (
 // Phases 1–3 of the ReplaceWithContent feature.
 // --------------------------------------------------------------------------
 
+// ImportFormatMode controls how style conflicts between source and target
+// documents are resolved during content import.
+//
+// This mirrors Aspose.Words ImportFormatMode — the industry-standard
+// document processing library — providing three well-defined strategies
+// for handling style ID collisions.
+//
+// Zero value (UseDestinationStyles) preserves backward compatibility.
+type ImportFormatMode int
+
+const (
+	// UseDestinationStyles uses the destination document's style definition
+	// when a style with the same ID exists in both documents. Styles present
+	// only in the source are deep-copied (including basedOn/next/link chains).
+	//
+	// This is the default and preserves the current behavior.
+	UseDestinationStyles ImportFormatMode = iota
+
+	// KeepSourceFormatting preserves the source document's visual formatting.
+	// When a style ID conflict occurs:
+	//   - Default behavior: source style properties are expanded into direct
+	//     paragraph/run attributes and the style reference is changed to the
+	//     target's default paragraph style.
+	//   - With ForceCopyStyles: the source style is copied with a unique
+	//     suffix (_0, _1, ...) to avoid collision.
+	KeepSourceFormatting
+
+	// KeepDifferentStyles is a hybrid strategy. For each conflicting style:
+	//   - If source and target definitions have identical formatting → uses
+	//     the destination style (like UseDestinationStyles).
+	//   - If formatting differs → behaves like KeepSourceFormatting (expands
+	//     to direct attributes, or copies with suffix if ForceCopyStyles).
+	KeepDifferentStyles
+)
+
+// ImportFormatOptions provides fine-grained control over content import
+// behavior beyond what ImportFormatMode alone offers.
+//
+// All fields default to false (zero value), preserving backward compatibility.
+// This mirrors Aspose.Words ImportFormatOptions.
+type ImportFormatOptions struct {
+	// ForceCopyStyles forces conflicting styles to be copied into the target
+	// with a unique suffix (_0, _1, ...) instead of expanding formatting
+	// into direct attributes. Only effective with KeepSourceFormatting and
+	// KeepDifferentStyles modes.
+	//
+	// Mirrors Aspose.Words ImportFormatOptions.ForceCopyStyles.
+	ForceCopyStyles bool
+
+	// KeepSourceNumbering preserves source list numbering as a separate
+	// list definition in the target. When false (default), source lists
+	// merge into matching target lists and continue their numbering.
+	//
+	// Current project behavior is equivalent to KeepSourceNumbering=true
+	// (always creates separate list definitions).
+	//
+	// Mirrors Aspose.Words ImportFormatOptions.KeepSourceNumbering.
+	KeepSourceNumbering bool
+}
+
 // ContentData describes the content to insert in place of a text placeholder.
 // It wraps a source Document whose body elements (paragraphs, tables) will
 // replace each occurrence of the placeholder.
@@ -33,9 +93,21 @@ import (
 //
 // The source Document must remain open (not garbage-collected) until
 // ReplaceWithContent returns. After the call, the source may be closed.
+//
+// Backward compatibility: ContentData{Source: doc} uses zero-value Format
+// (UseDestinationStyles) and zero-value Options — identical to the behavior
+// before ImportFormatMode was introduced.
 type ContentData struct {
 	// Source is the opened document whose body content will be inserted.
 	Source *Document
+
+	// Format controls how style conflicts between source and target are
+	// resolved. Default (zero value): UseDestinationStyles.
+	Format ImportFormatMode
+
+	// Options provides fine-grained import control.
+	// Default (zero value): all options disabled.
+	Options ImportFormatOptions
 }
 
 // preparedContent holds the pre-processed elements from a source document,

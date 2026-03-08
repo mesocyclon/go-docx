@@ -421,7 +421,7 @@ func newTestTargetParts(t *testing.T) (*parts.WmlPackage, *parts.StoryPart) {
 func newTestResourceImporter(t *testing.T, source *Document) (*ResourceImporter, *parts.StoryPart) {
 	t.Helper()
 	wmlPkg, targetSP := newTestTargetParts(t)
-	ri := newResourceImporter(source, nil, wmlPkg)
+	ri := newResourceImporter(source, nil, wmlPkg, UseDestinationStyles, ImportFormatOptions{})
 	return ri, targetSP
 }
 

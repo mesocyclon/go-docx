@@ -1,7 +1,9 @@
 package docx
 
 import (
+	"bytes"
 	"fmt"
+	"strings"
 
 	"github.com/beevik/etree"
 	"github.com/vortex/go-docx/pkg/docx/enum"
@@ -13,12 +15,18 @@ import (
 //
 // Scans the source document body for pStyle, rStyle, tblStyle references,
 // computes the transitive closure (basedOn, next, link chains), and merges
-// each style into the target document using UseDestinationStyles strategy:
+// each style into the target document using the configured ImportFormatMode:
 //
-//   - Style exists in target → use target definition (no copy).
-//   - Style missing from target → deep-copy from source.
+//   - UseDestinationStyles: conflict → use target definition (no copy).
+//   - KeepSourceFormatting: conflict → expand source formatting into direct
+//     attributes (or copy with suffix if ForceCopyStyles).
+//   - KeepDifferentStyles: conflict → compare formatting; identical = use
+//     target, different = behave like KeepSourceFormatting.
 //
-// The styleMap is populated for later use by remapAll.
+// Missing styles are always deep-copied from source (all 3 modes agree).
+//
+// The styleMap is populated for later use by remapAll. The expandStyles
+// map is populated for later use by expandDirectFormatting (Step 4).
 // --------------------------------------------------------------------------
 
 // importStyles imports all styles referenced by the source document body
@@ -157,13 +165,26 @@ func (ri *ResourceImporter) collectStyleClosure(seedIds []string) []*oxml.CT_Sty
 // Merge logic
 // --------------------------------------------------------------------------
 
-// mergeOneStyle merges a single source style into the target document
-// using UseDestinationStyles strategy:
+// mergeOneStyle merges a single source style into the target document.
+// Behavior depends on ri.importFormatMode:
 //
-//   - If the style already exists in the target (by styleId), use the target
-//     definition. The styleMap records the identity mapping.
-//   - If the style is missing from the target, deep-copy it from source,
-//     remap numId references inside the copy, and insert into target.
+// All modes — style NOT in target:
+//
+//	Deep-copy from source. All 3 modes agree on this.
+//
+// UseDestinationStyles — style EXISTS in target:
+//
+//	Use target definition. styleMap[id] = id.
+//
+// KeepSourceFormatting — style EXISTS in target:
+//
+//	ForceCopyStyles: copy with unique suffix (Heading1 → Heading1_0).
+//	Default: mark for expansion to direct attributes. styleMap[id] = target default.
+//
+// KeepDifferentStyles — style EXISTS in target:
+//
+//	Identical formatting: use target (like UseDestinationStyles).
+//	Different formatting: behave like KeepSourceFormatting.
 //
 // Idempotent via styleMap check.
 func (ri *ResourceImporter) mergeOneStyle(srcStyle *oxml.CT_Style) error {
@@ -180,29 +201,116 @@ func (ri *ResourceImporter) mergeOneStyle(srcStyle *oxml.CT_Style) error {
 		return fmt.Errorf("docx: accessing target styles: %w", err)
 	}
 
-	if tgtStyles.GetByID(id) != nil {
-		// UseDestinationStyles: style exists in template — use it.
-		ri.styleMap[id] = id
-		return nil
+	existing := tgtStyles.GetByID(id)
+
+	// --- Style NOT in target: always copy (all 3 modes agree) ---
+	if existing == nil {
+		return ri.copyStyleToTarget(srcStyle, id)
 	}
 
-	// Style not in target — deep-copy from source.
+	// --- Style EXISTS in target: behavior depends on mode ---
+	switch ri.importFormatMode {
+
+	case UseDestinationStyles:
+		// Conflict → use target definition. Original behavior.
+		ri.styleMap[id] = id
+
+	case KeepSourceFormatting:
+		if ri.opts.ForceCopyStyles {
+			// Copy with unique suffix: Heading1 → Heading1_0
+			return ri.copyStyleToTarget(srcStyle, ri.uniqueStyleId(id))
+		}
+		// Default: mark for expansion to direct attributes (Step 4).
+		ri.expandStyles[id] = srcStyle
+		ri.styleMap[id] = ri.targetDefaultParaStyleId()
+
+	case KeepDifferentStyles:
+		if stylesContentEqual(srcStyle, existing) {
+			// Same formatting → use target (like UseDestinationStyles).
+			ri.styleMap[id] = id
+		} else {
+			// Different formatting → behave like KeepSourceFormatting.
+			if ri.opts.ForceCopyStyles {
+				return ri.copyStyleToTarget(srcStyle, ri.uniqueStyleId(id))
+			}
+			ri.expandStyles[id] = srcStyle
+			ri.styleMap[id] = ri.targetDefaultParaStyleId()
+		}
+	}
+	return nil
+}
+
+// copyStyleToTarget deep-copies srcStyle into the target styles.xml under
+// targetId. If targetId differs from the source styleId, the clone's
+// w:styleId attribute and w:name value are updated to prevent confusion
+// in Word's style gallery.
+//
+// Handles numId and basedOn/next/link remapping on the clone.
+func (ri *ResourceImporter) copyStyleToTarget(srcStyle *oxml.CT_Style, targetId string) error {
+	tgtStyles, err := ri.targetStyles()
+	if err != nil {
+		return fmt.Errorf("docx: accessing target styles: %w", err)
+	}
+
 	clone := srcStyle.RawElement().Copy()
 
+	// Rename styleId and display name when copying under a new ID.
+	if targetId != srcStyle.StyleId() {
+		clone.CreateAttr("w:styleId", targetId)
+		if nameEl := findChild(clone, "w", "name"); nameEl != nil {
+			if v := nameEl.SelectAttrValue("w:val", ""); v != "" {
+				nameEl.CreateAttr("w:val", v+" (imported)")
+			}
+		}
+	}
+
 	// Remap numId inside the copied style definition (if present).
-	// This is done HERE, not in remapAll, because styles inserted into
-	// styles.xml are not part of the body element copies that remapAll
-	// processes.
+	// Done here because styles inserted into styles.xml are not part
+	// of the body element copies that remapAll processes.
 	ri.remapNumIdsInElement(clone)
 
 	// Remap basedOn/next/link references through styleMap.
-	// Under UseDestinationStyles this is a no-op (styleMap[id] == id),
-	// but correct to implement for future KeepSourceFormatting support.
 	ri.remapStyleRefsInElement(clone)
 
 	tgtStyles.RawElement().AddChild(clone)
-	ri.styleMap[id] = id
+	ri.styleMap[srcStyle.StyleId()] = targetId
 	return nil
+}
+
+// targetDefaultParaStyleId returns the styleId of the target document's
+// default paragraph style. Used as the style reference replacement when
+// expanding source formatting into direct attributes.
+//
+// Falls back to "Normal" if the target has no explicit default paragraph
+// style (which is the OOXML-implied default).
+func (ri *ResourceImporter) targetDefaultParaStyleId() string {
+	tgtStyles, err := ri.targetStyles()
+	if err != nil {
+		return "Normal"
+	}
+	def, err := tgtStyles.DefaultFor(enum.WdStyleTypeParagraph)
+	if err != nil || def == nil {
+		return "Normal"
+	}
+	return def.StyleId()
+}
+
+// uniqueStyleId generates a unique styleId by appending _0, _1, etc. to
+// the base ID. Checks both the target styles.xml and the current styleMap
+// to avoid collisions with styles already imported in this session.
+//
+// Mirrors the Aspose.Words naming convention for ForceCopyStyles.
+func (ri *ResourceImporter) uniqueStyleId(base string) string {
+	tgtStyles, _ := ri.targetStyles()
+	for i := 0; ; i++ {
+		candidate := fmt.Sprintf("%s_%d", base, i)
+		// Must not exist in target AND must not be already mapped.
+		if tgtStyles.GetByID(candidate) == nil {
+			if _, used := ri.styleMap[candidate]; !used {
+				return candidate
+			}
+		}
+	}
 }
 
 // --------------------------------------------------------------------------
@@ -406,6 +514,92 @@ func materializePStyle(p *etree.Element, styleId string) {
 	pStyle.CreateAttr("w:val", styleId)
 	pPr.InsertChildAt(0, pStyle)
 }
+
+// --------------------------------------------------------------------------
+// Style comparison
+// --------------------------------------------------------------------------
+
+// stylesContentEqual compares two styles by their formatting-relevant content,
+// ignoring w:name (display name) and w:rsid* attributes (revision session
+// IDs), which don't affect visual appearance.
+//
+// Used by KeepDifferentStyles to decide whether to use the target style
+// (identical formatting) or expand to direct attributes (different formatting).
+//
+// The comparison serializes cloned, stripped style elements to canonical XML
+// and compares byte-for-byte. This is robust against attribute ordering
+// differences while being exact on content.
+func stylesContentEqual(a, b *oxml.CT_Style) bool {
+	ac := a.RawElement().Copy()
+	bc := b.RawElement().Copy()
+	stripNonFormattingAttrs(ac)
+	stripNonFormattingAttrs(bc)
+
+	var bufA, bufB bytes.Buffer
+
+	docA := etree.NewDocument()
+	docA.SetRoot(ac)
+	docA.WriteSettings = etree.WriteSettings{CanonicalText: true}
+	docA.WriteTo(&bufA)
+
+	docB := etree.NewDocument()
+	docB.SetRoot(bc)
+	docB.WriteSettings = etree.WriteSettings{CanonicalText: true}
+	docB.WriteTo(&bufB)
+
+	return bytes.Equal(bufA.Bytes(), bufB.Bytes())
+}
+
+// stripNonFormattingAttrs removes w:name child elements and w:rsid*
+// attributes from a cloned style element before comparison.
+//
+//   - w:name is a display label ("Heading 1") — two styles can have different
+//     names but identical formatting.
+//   - w:rsid* attributes are revision session IDs injected by Word on every
+//     edit. They change constantly and carry no formatting information.
+func stripNonFormattingAttrs(el *etree.Element) {
+	// Remove w:name child element.
+	var toRemove []*etree.Element
+	for _, child := range el.ChildElements() {
+		if child.Space == "w" && child.Tag == "name" {
+			toRemove = append(toRemove, child)
+		}
+	}
+	for _, rm := range toRemove {
+		el.RemoveChild(rm)
+	}
+
+	// Remove rsid* attributes (revision session IDs).
+	filtered := el.Attr[:0]
+	for _, a := range el.Attr {
+		if !strings.HasPrefix(a.Key, "rsid") {
+			filtered = append(filtered, a)
+		}
+	}
+	el.Attr = filtered
+}
+
+// --------------------------------------------------------------------------
+// Low-level etree helpers
+// --------------------------------------------------------------------------
+
+// findChild returns the first child element of el with the given namespace
+// prefix and local tag name, or nil if not found.
+//
+// This is a package-level utility for working with raw *etree.Element trees
+// where the oxml.Element.FindChild method is not available.
+func findChild(el *etree.Element, space, tag string) *etree.Element {
+	for _, child := range el.ChildElements() {
+		if child.Space == space && child.Tag == tag {
+			return child
+		}
+	}
+	return nil
+}
+
+// --------------------------------------------------------------------------
+// Misc helpers
+// --------------------------------------------------------------------------
 
 // appendUnique appends val to slice if not already present.
 func appendUnique(slice []string, val string) []string {

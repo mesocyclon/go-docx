@@ -5,6 +5,7 @@ import (
 
 	"github.com/beevik/etree"
 	"github.com/vortex/go-docx/pkg/docx/opc"
+	"github.com/vortex/go-docx/pkg/docx/oxml"
 	"github.com/vortex/go-docx/pkg/docx/parts"
 )
 
@@ -25,6 +26,11 @@ type ResourceImporter struct {
 	targetDoc *Document
 	targetPkg *parts.WmlPackage
 
+	// Import configuration — controls style conflict resolution strategy
+	// and fine-grained import options. Set once at construction time.
+	importFormatMode ImportFormatMode
+	opts             ImportFormatOptions
+
 	// Dedup for generic parts (charts, VML) — existing mechanism.
 	importedParts map[opc.PackURI]opc.Part
 
@@ -35,8 +41,20 @@ type ResourceImporter struct {
 
 	// Styles: source styleId → target styleId.
 	// With UseDestinationStyles the value always equals the key.
+	// With KeepSourceFormatting + ForceCopyStyles, the value may differ
+	// (e.g. "Heading1" → "Heading1_0").
 	styleMap  map[string]string
 	styleDone bool
+
+	// Styles marked for expansion to direct attributes.
+	// Populated by mergeOneStyle when KeepSourceFormatting or
+	// KeepDifferentStyles encounters a conflict (and ForceCopyStyles
+	// is false). Key = source styleId, Value = source CT_Style.
+	//
+	// After import, expandDirectFormatting uses this map to walk the
+	// prepared content elements and inline the source style properties
+	// before remapAll changes the style references.
+	expandStyles map[string]*oxml.CT_Style
 
 	// When source and target have different default paragraph styles,
 	// this holds the source default styleId so that paragraphs without
@@ -53,17 +71,29 @@ type ResourceImporter struct {
 
 // newResourceImporter creates a ResourceImporter for a single
 // ReplaceWithContent call. All maps are initialized empty and ready to use.
-func newResourceImporter(sourceDoc, targetDoc *Document, targetPkg *parts.WmlPackage) *ResourceImporter {
+//
+// mode and opts control style conflict resolution — see ImportFormatMode
+// and ImportFormatOptions. Zero values produce the original behavior
+// (UseDestinationStyles, all options disabled).
+func newResourceImporter(
+	sourceDoc, targetDoc *Document,
+	targetPkg *parts.WmlPackage,
+	mode ImportFormatMode,
+	opts ImportFormatOptions,
+) *ResourceImporter {
 	return &ResourceImporter{
-		sourceDoc:     sourceDoc,
-		targetDoc:     targetDoc,
-		targetPkg:     targetPkg,
-		importedParts: make(map[opc.PackURI]opc.Part),
-		numIdMap:      make(map[int]int),
-		absNumIdMap:   make(map[int]int),
-		styleMap:      make(map[string]string),
-		footnoteIdMap: make(map[int]int),
-		endnoteIdMap:  make(map[int]int),
+		sourceDoc:        sourceDoc,
+		targetDoc:        targetDoc,
+		targetPkg:        targetPkg,
+		importFormatMode: mode,
+		opts:             opts,
+		importedParts:    make(map[opc.PackURI]opc.Part),
+		numIdMap:         make(map[int]int),
+		absNumIdMap:      make(map[int]int),
+		styleMap:         make(map[string]string),
+		expandStyles:     make(map[string]*oxml.CT_Style),
+		footnoteIdMap:    make(map[int]int),
+		endnoteIdMap:     make(map[int]int),
 	}
 }
 
