@@ -84,6 +84,23 @@ type ImportFormatOptions struct {
 	//
 	// Mirrors Aspose.Words ImportFormatOptions.KeepSourceNumbering.
 	KeepSourceNumbering bool
+
+	// IgnoreHeaderFooter controls whether source formatting is applied
+	// to header/footer content during import.
+	//
+	// When true, headers and footers always use destination styles
+	// regardless of ImportFormatMode. Conflicting styles are NOT
+	// expanded to direct attributes and NOT copied with suffix —
+	// the target style definition is used as-is.
+	//
+	// When false (default), headers/footers are processed identically
+	// to the document body.
+	//
+	// Aspose.Words default: true. Go zero-value: false (backward
+	// compatible — existing behavior unchanged).
+	//
+	// Mirrors Aspose.Words ImportFormatOptions.IgnoreHeaderFooter.
+	IgnoreHeaderFooter bool
 }
 
 // ContentData describes the content to insert in place of a text placeholder.
@@ -516,6 +533,7 @@ func prepareContentElements(
 	sourceDoc *Document,
 	targetPart *parts.StoryPart,
 	ri *ResourceImporter,
+	ignoreSourceFormatting bool,
 ) (*preparedContent, error) {
 	// Step 1: Extract body elements from source, skipping <w:sectPr>.
 	srcBody := sourceDoc.element.Body()
@@ -557,14 +575,27 @@ func prepareContentElements(
 	// resolves the source style chain and merges properties into direct
 	// paragraph/run attributes. Must run BEFORE remapAll because it
 	// reads original (unmapped) styleIds to find elements to expand.
-	ri.expandDirectFormatting(elements)
+	//
+	// When ignoreSourceFormatting is true (IgnoreHeaderFooter for hdr/ftr),
+	// skip expansion — headers/footers use destination styles as-is.
+	if !ignoreSourceFormatting {
+		ri.expandDirectFormatting(elements)
+	}
 
 	// Step 2e: Remap resource references (styles, numbering, footnotes).
 	// Uses mappings populated during the import phase (Phase 1 of
 	// ReplaceWithContent). After expandDirectFormatting has inlined
 	// properties, remapAll changes expanded style refs to the target
 	// default paragraph style.
-	ri.remapAll(elements)
+	//
+	// When ignoreSourceFormatting is true, use UseDestinationStyles
+	// remapping strategy: conflicting styles keep original target
+	// definition instead of being expanded or copied with suffix.
+	if ignoreSourceFormatting {
+		ri.remapAllUseDestStyles(elements)
+	} else {
+		ri.remapAll(elements)
+	}
 
 	// Step 3: Collect all rId references from the copies.
 	referencedRIds := collectReferencedRIds(elements)

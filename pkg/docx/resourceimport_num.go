@@ -272,13 +272,13 @@ func buildAbsNumToNumIdMap(numbering *oxml.CT_Numbering) map[int]int {
 	return result
 }
 
-// findMatchingTargetNum finds a target num whose abstractNum has a compatible
-// list style, based on the first level's numFmt.
+// findMatchingTargetNum finds a target num whose abstractNum is compatible
+// with the source abstractNum for list merging.
 //
-// Matching heuristic: compare numFmt of the first <w:lvl w:ilvl="0"> in the
-// source abstractNum against every target abstractNum. If both use the same
-// numFmt value (bullet, decimal, lowerLetter, etc.), the target list is
-// considered compatible and its numId is returned.
+// Matching heuristic: compare numFmt and lvlText of every overlapping level
+// (by ilvl) between source and target abstractNums. If all overlapping levels
+// match, the definitions are considered compatible and the target numId is
+// returned. Levels present in only one definition are ignored.
 //
 // tgtAbsToNum is a pre-built reverse map (abstractNumId → numId) for O(1)
 // lookup instead of scanning NumList() per candidate.

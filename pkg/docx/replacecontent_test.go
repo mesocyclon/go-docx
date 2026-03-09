@@ -3798,6 +3798,426 @@ func TestRWC_DeepImport_RoundTrip(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// Task 4: IgnoreHeaderFooter tests
+// --------------------------------------------------------------------------
+
+// rcSetupConflictingStyleDocs creates target and source documents with
+// a conflicting "HFStyle" paragraph style. Target: jc=left, source: jc=center, bold.
+// Target has placeholder in body and header. Returns target, source.
+func rcSetupConflictingStyleDocs(t *testing.T, bodyTag, hdrTag string) (*Document, *Document) {
+	t.Helper()
+	target := mustNewDoc(t)
+	target.AddParagraph(bodyTag)
+
+	sec := target.Sections().Iter()[0]
+	hdr := sec.Header()
+	_, err := hdr.AddParagraph(hdrTag)
+	if err != nil {
+		t.Fatalf("AddParagraph to header: %v", err)
+	}
+
+	tgtStyles, err := target.part.Styles()
+	if err != nil {
+		t.Fatalf("target Styles: %v", err)
+	}
+	tgtStyleEl, _ := oxml.ParseXml([]byte(
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="HFStyle">` +
+			`<w:name w:val="HF Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`<w:rPr><w:sz w:val="24"/></w:rPr>` +
+			`</w:style>`,
+	))
+	tgtStyles.RawElement().AddChild(tgtStyleEl)
+
+	source := mustNewDoc(t)
+	srcStyles, err := source.part.Styles()
+	if err != nil {
+		t.Fatalf("source Styles: %v", err)
+	}
+	srcStyleEl, _ := oxml.ParseXml([]byte(
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="HFStyle">` +
+			`<w:name w:val="HF Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`<w:rPr><w:b/><w:sz w:val="28"/></w:rPr>` +
+			`</w:style>`,
+	))
+	srcStyles.RawElement().AddChild(srcStyleEl)
+
+	rcInjectStyledParagraph(t, source, "HFStyle", "styled content")
+
+	return target, source
+}
+
+// rcFindStyledParagraph searches container children for a <w:p> whose pStyle
+// has the given w:val. Returns the paragraph element or nil.
+func rcFindStyledParagraph(container *etree.Element, styleVal string) *etree.Element {
+	for _, child := range container.ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		pStyle := findChild(pPr, "w", "pStyle")
+		if pStyle == nil {
+			continue
+		}
+		if pStyle.SelectAttrValue("w:val", "") == styleVal {
+			return child
+		}
+	}
+	return nil
+}
+
+func TestRWC_IgnoreHeaderFooter_Default_ProcessesSameAsBody(t *testing.T) {
+	t.Parallel()
+	// IgnoreHeaderFooter=false (default) + KeepSourceFormatting →
+	// header content gets expanded formatting like the body.
+	target, source := rcSetupConflictingStyleDocs(t, "[<TAG>]", "[<TAG>]")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{IgnoreHeaderFooter: false},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Header should have expanded jc=center (same as body behavior).
+	sec := target.Sections().Iter()[0]
+	hdr := sec.Header()
+	bic, err := hdr.blockItemContainer()
+	if err != nil {
+		t.Fatalf("blockItemContainer: %v", err)
+	}
+	hdrEl := bic.Element()
+	found := false
+	for _, child := range hdrEl.ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		jc := findChild(pPr, "w", "jc")
+		if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+			found = true
+			// Verify bold also expanded.
+			rPr := findChild(pPr, "w", "rPr")
+			if rPr == nil || findChild(rPr, "w", "b") == nil {
+				t.Error("expected bold (b) expanded in header paragraph rPr")
+			}
+			// pStyle should NOT be HFStyle (remapped to default).
+			pStyle := findChild(pPr, "w", "pStyle")
+			if pStyle != nil && pStyle.SelectAttrValue("w:val", "") == "HFStyle" {
+				t.Error("pStyle should have been remapped away from HFStyle in header")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected expanded jc=center in header (IgnoreHeaderFooter=false)")
+	}
+}
+
+func TestRWC_IgnoreHeaderFooter_True_UsesDestStyles(t *testing.T) {
+	t.Parallel()
+	// IgnoreHeaderFooter=true + KeepSourceFormatting →
+	// header content does NOT get expanded formatting,
+	// pStyle stays as HFStyle (using target definition).
+	target, source := rcSetupConflictingStyleDocs(t, "[<TAG>]", "[<TAG>]")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{IgnoreHeaderFooter: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Header: pStyle should remain HFStyle, no jc=center expansion.
+	sec := target.Sections().Iter()[0]
+	hdr := sec.Header()
+	bic, err := hdr.blockItemContainer()
+	if err != nil {
+		t.Fatalf("blockItemContainer: %v", err)
+	}
+	hdrEl := bic.Element()
+	p := rcFindStyledParagraph(hdrEl, "HFStyle")
+	if p == nil {
+		t.Fatal("expected paragraph with pStyle=HFStyle in header (IgnoreHeaderFooter=true)")
+	}
+	pPr := findChild(p, "w", "pPr")
+	// No expanded jc=center.
+	jc := findChild(pPr, "w", "jc")
+	if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+		t.Error("header should NOT have expanded jc=center (IgnoreHeaderFooter=true)")
+	}
+	// No expanded bold.
+	rPr := findChild(pPr, "w", "rPr")
+	if rPr != nil && findChild(rPr, "w", "b") != nil {
+		t.Error("header should NOT have expanded bold (IgnoreHeaderFooter=true)")
+	}
+}
+
+func TestRWC_IgnoreHeaderFooter_True_UseDestNoOp(t *testing.T) {
+	t.Parallel()
+	// IgnoreHeaderFooter=true + UseDestinationStyles →
+	// behavior identical to IgnoreHeaderFooter=false (already dest styles).
+	target, source := rcSetupConflictingStyleDocs(t, "[<TAG>]", "[<TAG>]")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  UseDestinationStyles,
+		Options: ImportFormatOptions{IgnoreHeaderFooter: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Header: pStyle=HFStyle (dest definition), no expansion.
+	sec := target.Sections().Iter()[0]
+	hdr := sec.Header()
+	bic, err := hdr.blockItemContainer()
+	if err != nil {
+		t.Fatalf("blockItemContainer: %v", err)
+	}
+	p := rcFindStyledParagraph(bic.Element(), "HFStyle")
+	if p == nil {
+		t.Fatal("expected pStyle=HFStyle in header under UseDestinationStyles")
+	}
+	pPr := findChild(p, "w", "pPr")
+	jc := findChild(pPr, "w", "jc")
+	if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+		t.Error("UseDestinationStyles should not expand jc=center in header")
+	}
+}
+
+func TestRWC_IgnoreHeaderFooter_BodyUnaffected(t *testing.T) {
+	t.Parallel()
+	// IgnoreHeaderFooter=true + KeepSourceFormatting →
+	// body gets expand (full pipeline), header does NOT.
+	target, source := rcSetupConflictingStyleDocs(t, "[<TAG>]", "[<TAG>]")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{IgnoreHeaderFooter: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Body: should have expanded jc=center.
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	bodyExpanded := false
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		jc := findChild(pPr, "w", "jc")
+		if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+			bodyExpanded = true
+		}
+	}
+	if !bodyExpanded {
+		t.Error("body should have expanded jc=center (full pipeline)")
+	}
+
+	// Header: should NOT have expanded jc=center.
+	sec := target.Sections().Iter()[0]
+	hdr := sec.Header()
+	bic, err := hdr.blockItemContainer()
+	if err != nil {
+		t.Fatalf("blockItemContainer: %v", err)
+	}
+	for _, child := range bic.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		jc := findChild(pPr, "w", "jc")
+		if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+			t.Error("header should NOT have expanded jc=center (IgnoreHeaderFooter=true)")
+		}
+	}
+}
+
+func TestRWC_IgnoreHeaderFooter_True_KeepDifferent(t *testing.T) {
+	t.Parallel()
+	// IgnoreHeaderFooter=true + KeepDifferentStyles →
+	// header: different style NOT copied with suffix, uses target definition.
+	target, source := rcSetupConflictingStyleDocs(t, "[<TAG>]", "[<TAG>]")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepDifferentStyles,
+		Options: ImportFormatOptions{IgnoreHeaderFooter: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Body: should reference copied style HFStyle_0.
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	bodyCopied := rcFindStyledParagraph(body.Element(), "HFStyle_0")
+	if bodyCopied == nil {
+		t.Error("body should reference HFStyle_0 (KeepDifferentStyles, different)")
+	}
+
+	// Header: should reference original HFStyle (target definition), NOT HFStyle_0.
+	sec := target.Sections().Iter()[0]
+	hdr := sec.Header()
+	bic, err := hdr.blockItemContainer()
+	if err != nil {
+		t.Fatalf("blockItemContainer: %v", err)
+	}
+	hdrEl := bic.Element()
+	if rcFindStyledParagraph(hdrEl, "HFStyle_0") != nil {
+		t.Error("header should NOT reference HFStyle_0 (IgnoreHeaderFooter=true)")
+	}
+	if rcFindStyledParagraph(hdrEl, "HFStyle") == nil {
+		t.Error("header should reference HFStyle (target definition)")
+	}
+}
+
+func TestRWC_IgnoreHeaderFooter_True_ForceCopy(t *testing.T) {
+	t.Parallel()
+	// IgnoreHeaderFooter=true + KeepSourceFormatting + ForceCopyStyles →
+	// body: style copied as HFStyle_0.
+	// header: style NOT remapped to HFStyle_0, references original target HFStyle.
+	target, source := rcSetupConflictingStyleDocs(t, "[<TAG>]", "[<TAG>]")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{
+			ForceCopyStyles:    true,
+			IgnoreHeaderFooter: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Body: should reference HFStyle_0.
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	if rcFindStyledParagraph(body.Element(), "HFStyle_0") == nil {
+		t.Error("body should reference HFStyle_0 (ForceCopyStyles)")
+	}
+
+	// Header: should reference HFStyle (NOT HFStyle_0).
+	sec := target.Sections().Iter()[0]
+	hdr := sec.Header()
+	bic, err := hdr.blockItemContainer()
+	if err != nil {
+		t.Fatalf("blockItemContainer: %v", err)
+	}
+	hdrEl := bic.Element()
+	if rcFindStyledParagraph(hdrEl, "HFStyle_0") != nil {
+		t.Error("header should NOT reference HFStyle_0 (IgnoreHeaderFooter=true)")
+	}
+	if rcFindStyledParagraph(hdrEl, "HFStyle") == nil {
+		t.Error("header should reference HFStyle (target definition)")
+	}
+}
+
+func TestRWC_IgnoreHeaderFooter_CommentsUnaffected(t *testing.T) {
+	t.Parallel()
+	// IgnoreHeaderFooter=true + KeepSourceFormatting →
+	// comments get expanded formatting (full pipeline), like body.
+	target := mustNewDoc(t)
+	target.AddParagraph("body text")
+
+	// Add conflicting style to target.
+	tgtStyles, _ := target.part.Styles()
+	tgtStyleEl, _ := oxml.ParseXml([]byte(
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="CmtStyle">` +
+			`<w:name w:val="Comment Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`,
+	))
+	tgtStyles.RawElement().AddChild(tgtStyleEl)
+
+	// Create comment with placeholder via public API.
+	comments, err := target.Comments()
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	_, err = comments.AddComment("[<TAG>]", "Author", nil)
+	if err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+
+	// Source: conflicting style.
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcStyleEl, _ := oxml.ParseXml([]byte(
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="CmtStyle">` +
+			`<w:name w:val="Comment Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`<w:rPr><w:b/></w:rPr>` +
+			`</w:style>`,
+	))
+	srcStyles.RawElement().AddChild(srcStyleEl)
+	rcInjectStyledParagraph(t, source, "CmtStyle", "comment content")
+
+	_, err = target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source:  source,
+		Format:  KeepSourceFormatting,
+		Options: ImportFormatOptions{IgnoreHeaderFooter: true},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Comments should have expanded jc=center (full pipeline, NOT affected
+	// by IgnoreHeaderFooter).
+	comments, err = target.Comments()
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	found := false
+	for _, c := range comments.Iter() {
+		for _, child := range c.BlockItemContainer.Element().ChildElements() {
+			if child.Space != "w" || child.Tag != "p" {
+				continue
+			}
+			pPr := findChild(child, "w", "pPr")
+			if pPr == nil {
+				continue
+			}
+			jc := findChild(pPr, "w", "jc")
+			if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("comments should have expanded jc=center (unaffected by IgnoreHeaderFooter)")
+	}
+}
+
+// --------------------------------------------------------------------------
 // Test helpers (Step 8)
 // --------------------------------------------------------------------------
 

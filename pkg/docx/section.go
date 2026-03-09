@@ -493,7 +493,9 @@ func (b *baseHeaderFooter) replaceWithContentDedup(
 ) (int, error) {
 	return b.applyToContainerDedup(func(bic *BlockItemContainer) (int, error) {
 		// Prepare content with relationships mapped to THIS header's StoryPart.
-		prep, err := prepareContentElements(sourceDoc, bic.part, ri)
+		ignoreHF := ri.opts.IgnoreHeaderFooter &&
+			ri.importFormatMode != UseDestinationStyles
+		prep, err := prepareContentElements(sourceDoc, bic.part, ri, ignoreHF)
 		if err != nil {
 			return 0, err
 		}

@@ -654,7 +654,7 @@ func (d *Document) ReplaceWithContent(old string, cd ContentData) (count int, er
 	}
 
 	// Prepare content once — remap relationships from source → target body part.
-	bodyPrep, err := prepareContentElements(cd.Source, &d.part.StoryPart, ri)
+	bodyPrep, err := prepareContentElements(cd.Source, &d.part.StoryPart, ri, false)
 	if err != nil {
 		return 0, fmt.Errorf("docx: preparing content for body: %w", err)
 	}
@@ -723,7 +723,7 @@ func (d *Document) replaceWithContentInComments(
 	defaultWidth := Inches(6.5).Twips()
 	count := 0
 	for _, c := range comments.Iter() {
-		prep, err := prepareContentElements(sourceDoc, c.BlockItemContainer.part, ri)
+		prep, err := prepareContentElements(sourceDoc, c.BlockItemContainer.part, ri, false)
 		if err != nil {
 			return count, err
 		}

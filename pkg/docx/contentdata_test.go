@@ -807,7 +807,7 @@ func TestPrepareContentElements_SkipsSectPr(t *testing.T) {
 
 	ri, targetSP := newTestResourceImporter(t, source)
 
-	prep, err := prepareContentElements(source, targetSP, ri)
+	prep, err := prepareContentElements(source, targetSP, ri, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -985,7 +985,7 @@ func TestPrepareContentElements_StripsParagraphLevelSectPr(t *testing.T) {
 
 	ri, targetSP := newTestResourceImporter(t, source)
 
-	prep, err := prepareContentElements(source, targetSP, ri)
+	prep, err := prepareContentElements(source, targetSP, ri, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1111,7 +1111,7 @@ func TestPrepareContentElements_EmptyBody(t *testing.T) {
 
 	ri, targetSP := newTestResourceImporter(t, source)
 
-	prep, err := prepareContentElements(source, targetSP, ri)
+	prep, err := prepareContentElements(source, targetSP, ri, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1168,7 +1168,7 @@ func TestPrepareContentElements_PreservesOrder(t *testing.T) {
 
 	ri, targetSP := newTestResourceImporter(t, source)
 
-	prep, err := prepareContentElements(source, targetSP, ri)
+	prep, err := prepareContentElements(source, targetSP, ri, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1193,7 +1193,7 @@ func TestPrepareContentElements_DeepCopy(t *testing.T) {
 
 	ri, targetSP := newTestResourceImporter(t, source)
 
-	prep, err := prepareContentElements(source, targetSP, ri)
+	prep, err := prepareContentElements(source, targetSP, ri, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1273,7 +1273,7 @@ func TestPrepareContentElements_RemapsRIds(t *testing.T) {
 
 	ri, targetSP := newTestResourceImporter(t, source)
 
-	prep, err := prepareContentElements(source, targetSP, ri)
+	prep, err := prepareContentElements(source, targetSP, ri, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1353,7 +1353,7 @@ func TestPrepareContentElements_OrphanedRIdSkipped(t *testing.T) {
 	ri, targetSP := newTestResourceImporter(t, source)
 
 	// Should NOT error — orphaned references are skipped silently.
-	prep, err := prepareContentElements(source, targetSP, ri)
+	prep, err := prepareContentElements(source, targetSP, ri, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -157,6 +157,73 @@ func (ri *ResourceImporter) remapAll(elements []*etree.Element) {
 	}
 }
 
+// remapAllUseDestStyles remaps resource references using
+// UseDestinationStyles strategy, regardless of the RI's actual mode.
+//
+// For conflicting styles (both expanded and copied), leaves the
+// original source styleId unchanged — the target document already
+// has a style definition under that same ID, which is exactly
+// the "use destination styles" semantics.
+//
+// For non-conflicting styles (exist only in source, or built-in name
+// fallback where srcId != targetId), uses the standard styleMap mapping.
+//
+// Used when IgnoreHeaderFooter=true for header/footer content.
+func (ri *ResourceImporter) remapAllUseDestStyles(elements []*etree.Element) {
+	if len(ri.numIdMap) == 0 && len(ri.styleMap) == 0 &&
+		len(ri.footnoteIdMap) == 0 && len(ri.endnoteIdMap) == 0 {
+		return
+	}
+
+	for _, root := range elements {
+		stack := []*etree.Element{root}
+		for len(stack) > 0 {
+			el := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+
+			if el.Space == "w" {
+				switch el.Tag {
+				case "numId":
+					ri.remapAttrValInt(el, ri.numIdMap)
+				case "pStyle", "rStyle", "tblStyle":
+					ri.remapStyleUseDestStyles(el)
+				case "footnoteReference":
+					ri.remapAttrId(el, ri.footnoteIdMap)
+				case "endnoteReference":
+					ri.remapAttrId(el, ri.endnoteIdMap)
+				}
+			}
+			stack = append(stack, el.ChildElements()...)
+		}
+	}
+}
+
+// remapStyleUseDestStyles remaps a single pStyle/rStyle/tblStyle element
+// using UseDestinationStyles strategy:
+//   - If the styleId was marked for expansion (conflict, KeepSourceFormatting)
+//     or copied with suffix (ForceCopyStyles / KeepDifferentStyles), leave
+//     unchanged — the target has a definition under the same original ID.
+//   - Otherwise, apply the standard styleMap mapping (e.g. cross-locale
+//     built-in name fallback: "a" → "Normal").
+func (ri *ResourceImporter) remapStyleUseDestStyles(el *etree.Element) {
+	v := el.SelectAttrValue("w:val", "")
+	if v == "" {
+		return
+	}
+	// Conflicting styles: target already has a definition under this ID.
+	// Leave unchanged so the paragraph uses the target's definition.
+	if _, isExpanded := ri.expandStyles[v]; isExpanded {
+		return
+	}
+	if ri.copiedStyleIds[v] {
+		return
+	}
+	// Non-conflicting: apply standard mapping (e.g. locale fallback).
+	if newVal, ok := ri.styleMap[v]; ok {
+		el.CreateAttr("w:val", newVal)
+	}
+}
+
 // remapAttrValInt rewrites the w:val attribute of el using the given int map.
 // If the current value is not in the map, the attribute is left unchanged.
 func (ri *ResourceImporter) remapAttrValInt(el *etree.Element, m map[int]int) {
