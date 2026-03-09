@@ -259,7 +259,7 @@ func (ri *ResourceImporter) mergeOneStyle(srcStyle *oxml.CT_Style) error {
 		ri.styleMap[id] = ri.targetDefaultParaStyleId()
 
 	case KeepDifferentStyles:
-		if stylesContentEqual(srcStyle, existing) {
+		if ri.stylesEffectiveEqual(srcStyle, existing) {
 			// Same formatting → use target (like UseDestinationStyles).
 			ri.styleMap[id] = targetId
 		} else {
@@ -576,57 +576,77 @@ func materializePStyle(p *etree.Element, styleId string) {
 // Style comparison
 // --------------------------------------------------------------------------
 
-// stylesContentEqual compares two styles by their formatting-relevant content,
-// ignoring w:name (display name) and w:rsid* attributes (revision session
-// IDs), which don't affect visual appearance.
+// stylesEffectiveEqual compares two styles by their resolved effective
+// formatting, walking the full basedOn chain in each document's styles.
 //
-// Used by KeepDifferentStyles to decide whether to use the target style
-// (identical formatting) or expand to direct attributes (different formatting).
+// Mirrors Aspose.Words Style.Equals():
+//   - Recursively compares basedOn/linked chains
+//   - Excludes docDefaults (per Aspose: "Styles defaults are not
+//     included in comparison")
+//   - Ignores w:name and rsid* attributes
 //
-// The comparison serializes cloned, stripped style elements to canonical XML
-// and compares byte-for-byte. This is robust against attribute ordering
-// differences while being exact on content.
-func stylesContentEqual(a, b *oxml.CT_Style) bool {
-	ac := a.RawElement().Copy()
-	bc := b.RawElement().Copy()
-	stripNonFormattingAttrs(ac)
-	stripNonFormattingAttrs(bc)
+// Method on ResourceImporter because it needs access to both
+// sourceStyles() and targetStyles() for chain resolution.
+func (ri *ResourceImporter) stylesEffectiveEqual(srcStyle, tgtStyle *oxml.CT_Style) bool {
+	srcStyles, err := ri.sourceStyles()
+	if err != nil {
+		return false
+	}
+	tgtStyles, err := ri.targetStyles()
+	if err != nil {
+		return false
+	}
+
+	srcPPr, srcRPr := walkStyleChain(srcStyle, srcStyles)
+	tgtPPr, tgtRPr := walkStyleChain(tgtStyle, tgtStyles)
+
+	cleanResolvedProps(srcPPr, srcRPr)
+	cleanResolvedProps(tgtPPr, tgtRPr)
+
+	return elementsEqual(srcPPr, tgtPPr) && elementsEqual(srcRPr, tgtRPr)
+}
+
+// cleanResolvedProps strips comparison-irrelevant data from resolved
+// pPr/rPr: style-internal references (pStyle/rStyle) and rsid* attributes.
+func cleanResolvedProps(pPr, rPr *etree.Element) {
+	if pPr != nil {
+		removeChild(pPr, "w", "pStyle")
+		stripRsidRecursive(pPr)
+	}
+	if rPr != nil {
+		removeChild(rPr, "w", "rStyle")
+		stripRsidRecursive(rPr)
+	}
+}
+
+// elementsEqual compares two etree elements by canonical XML serialization.
+// Both nil → true. One nil, other non-nil → false.
+func elementsEqual(a, b *etree.Element) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
 
 	var bufA, bufB bytes.Buffer
-
 	docA := etree.NewDocument()
-	docA.SetRoot(ac)
+	docA.SetRoot(a.Copy())
 	docA.WriteSettings = etree.WriteSettings{CanonicalText: true}
 	docA.WriteTo(&bufA)
 
 	docB := etree.NewDocument()
-	docB.SetRoot(bc)
+	docB.SetRoot(b.Copy())
 	docB.WriteSettings = etree.WriteSettings{CanonicalText: true}
 	docB.WriteTo(&bufB)
 
 	return bytes.Equal(bufA.Bytes(), bufB.Bytes())
 }
 
-// stripNonFormattingAttrs removes w:name child elements and w:rsid*
-// attributes from a cloned style element before comparison.
-//
-//   - w:name is a display label ("Heading 1") — two styles can have different
-//     names but identical formatting.
-//   - w:rsid* attributes are revision session IDs injected by Word on every
-//     edit. They change constantly and carry no formatting information.
-func stripNonFormattingAttrs(el *etree.Element) {
-	// Remove w:name child element.
-	var toRemove []*etree.Element
-	for _, child := range el.ChildElements() {
-		if child.Space == "w" && child.Tag == "name" {
-			toRemove = append(toRemove, child)
-		}
-	}
-	for _, rm := range toRemove {
-		el.RemoveChild(rm)
-	}
-
-	// Remove rsid* attributes (revision session IDs).
+// stripRsidRecursive removes rsid* attributes from el and all descendants.
+// rsid attributes are revision session IDs injected by Word on every edit;
+// they carry no formatting information.
+func stripRsidRecursive(el *etree.Element) {
 	filtered := el.Attr[:0]
 	for _, a := range el.Attr {
 		if !strings.HasPrefix(a.Key, "rsid") {
@@ -634,6 +654,9 @@ func stripNonFormattingAttrs(el *etree.Element) {
 		}
 	}
 	el.Attr = filtered
+	for _, child := range el.ChildElements() {
+		stripRsidRecursive(child)
+	}
 }
 
 // --------------------------------------------------------------------------

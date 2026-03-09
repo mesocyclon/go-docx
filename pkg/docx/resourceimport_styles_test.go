@@ -2283,3 +2283,440 @@ func TestFixupCopiedStyles_RemapsBasedOn(t *testing.T) {
 		t.Errorf("expected basedOn remapped to 'a', got %s", v)
 	}
 }
+
+// --------------------------------------------------------------------------
+// walkStyleChain tests
+// --------------------------------------------------------------------------
+
+func TestWalkStyleChain_Basic(t *testing.T) {
+	t.Parallel()
+	// Parent: jc=left, sz=20. Child: jc=center (overrides parent).
+	styles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="Parent">
+			<w:name w:val="Parent"/>
+			<w:pPr><w:jc w:val="left"/></w:pPr>
+			<w:rPr><w:sz w:val="20"/></w:rPr>
+		</w:style>`,
+		`<w:style w:type="paragraph" w:styleId="Child">
+			<w:name w:val="Child"/>
+			<w:basedOn w:val="Parent"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	child := styles.GetByID("Child")
+	pPr, rPr := walkStyleChain(child, styles)
+
+	// pPr: jc=center (child overrides parent).
+	if pPr == nil {
+		t.Fatal("expected pPr")
+	}
+	jc := findChild(pPr, "w", "jc")
+	if jc == nil || jc.SelectAttrValue("w:val", "") != "center" {
+		t.Error("expected jc=center (child overrides parent)")
+	}
+
+	// rPr: sz=20 (inherited from parent).
+	if rPr == nil {
+		t.Fatal("expected rPr inherited from parent")
+	}
+	sz := findChild(rPr, "w", "sz")
+	if sz == nil || sz.SelectAttrValue("w:val", "") != "20" {
+		t.Error("expected sz=20 inherited from parent")
+	}
+}
+
+func TestWalkStyleChain_NoBasedOn(t *testing.T) {
+	t.Parallel()
+	// Root style → returns own pPr/rPr.
+	styles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="Root">
+			<w:name w:val="Root"/>
+			<w:pPr><w:jc w:val="right"/></w:pPr>
+			<w:rPr><w:b/></w:rPr>
+		</w:style>`,
+	)
+	root := styles.GetByID("Root")
+	pPr, rPr := walkStyleChain(root, styles)
+
+	if pPr == nil {
+		t.Fatal("expected pPr from root style")
+	}
+	if findChild(pPr, "w", "jc") == nil {
+		t.Error("expected jc in pPr")
+	}
+	if rPr == nil {
+		t.Fatal("expected rPr from root style")
+	}
+	if findChild(rPr, "w", "b") == nil {
+		t.Error("expected bold in rPr")
+	}
+}
+
+func TestWalkStyleChain_CycleProtection(t *testing.T) {
+	t.Parallel()
+	// A basedOn B, B basedOn A → must not hang.
+	styles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="A">
+			<w:name w:val="A"/>
+			<w:basedOn w:val="B"/>
+			<w:pPr><w:jc w:val="left"/></w:pPr>
+		</w:style>`,
+		`<w:style w:type="paragraph" w:styleId="B">
+			<w:name w:val="B"/>
+			<w:basedOn w:val="A"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	a := styles.GetByID("A")
+	// Should not hang; result is deterministic.
+	pPr, _ := walkStyleChain(a, styles)
+	if pPr == nil {
+		t.Fatal("expected pPr even with cycle")
+	}
+}
+
+// --------------------------------------------------------------------------
+// stylesEffectiveEqual tests
+// --------------------------------------------------------------------------
+
+// newMockRI constructs a minimal ResourceImporter with source and target styles
+// for stylesEffectiveEqual testing.
+func newMockRI(srcStyles, tgtStyles *etree.Element) *ResourceImporter {
+	ri := &ResourceImporter{
+		styleMap:       map[string]string{},
+		expandStyles:   map[string]*oxml.CT_Style{},
+		copiedStyleIds: map[string]bool{},
+	}
+	ri.sourceDoc = &Document{}
+	ri.sourceDoc.part = newMockDocumentPartWithStyles(srcStyles)
+	ri.targetDoc = &Document{}
+	ri.targetDoc.part = newMockDocumentPartWithStyles(tgtStyles)
+	return ri
+}
+
+func TestStylesEffectiveEqual_IdenticalRoot(t *testing.T) {
+	t.Parallel()
+	// Two root styles with identical pPr(jc=center) + rPr(b) → true.
+	srcStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="S">
+			<w:name w:val="S"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+			<w:rPr><w:b/></w:rPr>
+		</w:style>`,
+	)
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="S">
+			<w:name w:val="S"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+			<w:rPr><w:b/></w:rPr>
+		</w:style>`,
+	)
+	ri := newMockRI(srcStyles.RawElement(), tgtStyles.RawElement())
+	if !ri.stylesEffectiveEqual(srcStyles.GetByID("S"), tgtStyles.GetByID("S")) {
+		t.Error("identical root styles should be equal")
+	}
+}
+
+func TestStylesEffectiveEqual_DifferentRoot(t *testing.T) {
+	t.Parallel()
+	// src rPr(b), tgt rPr(i) → false.
+	srcStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="S">
+			<w:name w:val="S"/>
+			<w:rPr><w:b/></w:rPr>
+		</w:style>`,
+	)
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="S">
+			<w:name w:val="S"/>
+			<w:rPr><w:i/></w:rPr>
+		</w:style>`,
+	)
+	ri := newMockRI(srcStyles.RawElement(), tgtStyles.RawElement())
+	if ri.stylesEffectiveEqual(srcStyles.GetByID("S"), tgtStyles.GetByID("S")) {
+		t.Error("styles with different rPr should not be equal")
+	}
+}
+
+func TestStylesEffectiveEqual_SameXmlDifferentParent(t *testing.T) {
+	t.Parallel()
+	// Style X: pPr(jc=center), basedOn=P.
+	// Source P: rPr(sz=24). Target P: rPr(sz=20).
+	// Resolved X differs by sz → false.
+	srcStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="P">
+			<w:name w:val="P"/>
+			<w:rPr><w:sz w:val="24"/></w:rPr>
+		</w:style>`,
+		`<w:style w:type="paragraph" w:styleId="X">
+			<w:name w:val="X"/>
+			<w:basedOn w:val="P"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="P">
+			<w:name w:val="P"/>
+			<w:rPr><w:sz w:val="20"/></w:rPr>
+		</w:style>`,
+		`<w:style w:type="paragraph" w:styleId="X">
+			<w:name w:val="X"/>
+			<w:basedOn w:val="P"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	ri := newMockRI(srcStyles.RawElement(), tgtStyles.RawElement())
+	if ri.stylesEffectiveEqual(srcStyles.GetByID("X"), tgtStyles.GetByID("X")) {
+		t.Error("same own XML but different parent → different effective → should be not equal")
+	}
+}
+
+func TestStylesEffectiveEqual_DifferentXmlSameResolved(t *testing.T) {
+	t.Parallel()
+	// Source X: basedOn=P1(jc=left), own pPr(jc=center) → effective jc=center.
+	// Target X: basedOn=P2(jc=center), no own pPr → effective jc=center.
+	// Same effective → true.
+	srcStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="P1">
+			<w:name w:val="P1"/>
+			<w:pPr><w:jc w:val="left"/></w:pPr>
+		</w:style>`,
+		`<w:style w:type="paragraph" w:styleId="X">
+			<w:name w:val="X"/>
+			<w:basedOn w:val="P1"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="P2">
+			<w:name w:val="P2"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+		`<w:style w:type="paragraph" w:styleId="X">
+			<w:name w:val="X"/>
+			<w:basedOn w:val="P2"/>
+		</w:style>`,
+	)
+	ri := newMockRI(srcStyles.RawElement(), tgtStyles.RawElement())
+	if !ri.stylesEffectiveEqual(srcStyles.GetByID("X"), tgtStyles.GetByID("X")) {
+		t.Error("different own XML but same effective → should be equal")
+	}
+}
+
+func TestStylesEffectiveEqual_CircularProtection(t *testing.T) {
+	t.Parallel()
+	// A basedOn B, B basedOn A → must not hang.
+	srcStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="A">
+			<w:name w:val="A"/><w:basedOn w:val="B"/>
+			<w:pPr><w:jc w:val="left"/></w:pPr>
+		</w:style>`,
+		`<w:style w:type="paragraph" w:styleId="B">
+			<w:name w:val="B"/><w:basedOn w:val="A"/>
+		</w:style>`,
+	)
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="A">
+			<w:name w:val="A"/><w:basedOn w:val="B"/>
+			<w:pPr><w:jc w:val="left"/></w:pPr>
+		</w:style>`,
+		`<w:style w:type="paragraph" w:styleId="B">
+			<w:name w:val="B"/><w:basedOn w:val="A"/>
+		</w:style>`,
+	)
+	ri := newMockRI(srcStyles.RawElement(), tgtStyles.RawElement())
+	// Should not hang; identical cycles → equal.
+	if !ri.stylesEffectiveEqual(srcStyles.GetByID("A"), tgtStyles.GetByID("A")) {
+		t.Error("identical circular chains should be equal")
+	}
+}
+
+func TestStylesEffectiveEqual_MissingBasedOn(t *testing.T) {
+	t.Parallel()
+	// basedOn references non-existent style → chain breaks, compare available part.
+	srcStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="X">
+			<w:name w:val="X"/><w:basedOn w:val="Missing"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="X">
+			<w:name w:val="X"/><w:basedOn w:val="Missing"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	ri := newMockRI(srcStyles.RawElement(), tgtStyles.RawElement())
+	if !ri.stylesEffectiveEqual(srcStyles.GetByID("X"), tgtStyles.GetByID("X")) {
+		t.Error("same style with missing basedOn → should be equal (chain breaks at same point)")
+	}
+}
+
+func TestStylesEffectiveEqual_IgnoresName(t *testing.T) {
+	t.Parallel()
+	// Different w:name but identical formatting → true.
+	srcStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="S">
+			<w:name w:val="Heading 1"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="S">
+			<w:name w:val="Заголовок 1"/>
+			<w:pPr><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	ri := newMockRI(srcStyles.RawElement(), tgtStyles.RawElement())
+	if !ri.stylesEffectiveEqual(srcStyles.GetByID("S"), tgtStyles.GetByID("S")) {
+		t.Error("different w:name, same formatting → should be equal")
+	}
+}
+
+func TestStylesEffectiveEqual_IgnoresRsid(t *testing.T) {
+	t.Parallel()
+	// Different rsid* attributes, same formatting → true.
+	srcStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="S" w:rsidR="00AB1234">
+			<w:name w:val="S"/>
+			<w:pPr w:rsidRPr="00CD5678"><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="S" w:rsidR="00FF9999">
+			<w:name w:val="S"/>
+			<w:pPr w:rsidRPr="00112233"><w:jc w:val="center"/></w:pPr>
+		</w:style>`,
+	)
+	ri := newMockRI(srcStyles.RawElement(), tgtStyles.RawElement())
+	if !ri.stylesEffectiveEqual(srcStyles.GetByID("S"), tgtStyles.GetByID("S")) {
+		t.Error("different rsid attrs, same formatting → should be equal")
+	}
+}
+
+func TestStylesEffectiveEqual_ExcludesDocDefaults(t *testing.T) {
+	t.Parallel()
+	// Source docDefaults: rPr(sz=24). Target docDefaults: rPr(sz=20).
+	// Styles are identical by resolved chain (without docDefaults) → true.
+	srcStylesEl, _ := oxml.ParseXml([]byte(
+		`<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>` +
+			`<w:style w:type="paragraph" w:styleId="S"><w:name w:val="S"/>` +
+			`<w:pPr><w:jc w:val="center"/></w:pPr></w:style>` +
+			`</w:styles>`))
+	tgtStylesEl, _ := oxml.ParseXml([]byte(
+		`<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="20"/></w:rPr></w:rPrDefault></w:docDefaults>` +
+			`<w:style w:type="paragraph" w:styleId="S"><w:name w:val="S"/>` +
+			`<w:pPr><w:jc w:val="center"/></w:pPr></w:style>` +
+			`</w:styles>`))
+	srcStyles := &oxml.CT_Styles{Element: oxml.WrapElement(srcStylesEl)}
+	tgtStyles := &oxml.CT_Styles{Element: oxml.WrapElement(tgtStylesEl)}
+	ri := newMockRI(srcStylesEl, tgtStylesEl)
+	if !ri.stylesEffectiveEqual(srcStyles.GetByID("S"), tgtStyles.GetByID("S")) {
+		t.Error("docDefaults differ but style chains are same → should be equal (docDefaults excluded)")
+	}
+}
+
+// --------------------------------------------------------------------------
+// elementsEqual tests
+// --------------------------------------------------------------------------
+
+func TestElementsEqual_BothNil(t *testing.T) {
+	t.Parallel()
+	if !elementsEqual(nil, nil) {
+		t.Error("both nil → should be equal")
+	}
+}
+
+func TestElementsEqual_OneNil(t *testing.T) {
+	t.Parallel()
+	el := etree.NewElement("w:pPr")
+	if elementsEqual(el, nil) {
+		t.Error("one nil, one non-nil → should not be equal")
+	}
+	if elementsEqual(nil, el) {
+		t.Error("one nil, one non-nil → should not be equal")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Integration: stylesEffectiveEqual + KeepDifferentStyles
+// --------------------------------------------------------------------------
+
+func TestRWC_KeepDifferent_EffectiveEqual_SameResolvedDiffXml(t *testing.T) {
+	t.Parallel()
+	// Source and target styles with different own XML but same effective
+	// formatting → style NOT copied, uses target definition.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	// Target: P2(jc=center), X basedOn P2 (no own pPr → effective jc=center).
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="P2">` +
+			`<w:name w:val="P2"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="EffX">` +
+			`<w:name w:val="Eff X"/><w:basedOn w:val="P2"/>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		tgtStyles.RawElement().AddChild(el)
+	}
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	// Source: P1(jc=left), X basedOn P1, own pPr(jc=center) → effective jc=center.
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="P1">` +
+			`<w:name w:val="P1"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="EffX">` +
+			`<w:name w:val="Eff X"/><w:basedOn w:val="P1"/>` +
+			`<w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		srcStyles.RawElement().AddChild(el)
+	}
+	rcInjectStyledParagraph(t, source, "EffX", "effective equal text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// EffX_0 must NOT exist — effective formatting is the same.
+	tgtStyles, _ = target.part.Styles()
+	if tgtStyles.GetByID("EffX_0") != nil {
+		t.Error("EffX_0 should not exist — effective formatting is identical")
+	}
+
+	// Paragraph must reference "EffX" (target definition).
+	body, _ := target.getBody()
+	found := false
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		ps := findChild(pPr, "w", "pStyle")
+		if ps != nil && ps.SelectAttrValue("w:val", "") == "EffX" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected paragraph referencing EffX (target definition, not copied)")
+	}
+}
