@@ -251,69 +251,174 @@ func TestRandomNsid(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// firstLevelNumFmt tests
+// extractLevelSignatures tests
 // --------------------------------------------------------------------------
 
-func TestFirstLevelNumFmt_Decimal(t *testing.T) {
+func TestExtractLevelSignatures_Basic(t *testing.T) {
+	t.Parallel()
 	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
-		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>` +
-		`<w:lvl w:ilvl="1"><w:numFmt w:val="lowerLetter"/></w:lvl>` +
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>` +
+		`<w:lvl w:ilvl="1"><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2)"/></w:lvl>` +
+		`<w:lvl w:ilvl="2"><w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%3."/></w:lvl>` +
 		`</w:abstractNum>`
 	el, _ := oxml.ParseXml([]byte(xml))
 
-	got := firstLevelNumFmt(el)
-	if got != "decimal" {
-		t.Errorf("expected decimal, got %q", got)
+	sigs := extractLevelSignatures(el)
+	if len(sigs) != 3 {
+		t.Fatalf("expected 3 levels, got %d", len(sigs))
+	}
+	if s := sigs["0"]; s.numFmt != "decimal" || s.lvlText != "%1." {
+		t.Errorf("level 0: got %+v", s)
+	}
+	if s := sigs["1"]; s.numFmt != "lowerLetter" || s.lvlText != "%2)" {
+		t.Errorf("level 1: got %+v", s)
+	}
+	if s := sigs["2"]; s.numFmt != "lowerRoman" || s.lvlText != "%3." {
+		t.Errorf("level 2: got %+v", s)
 	}
 }
 
-func TestFirstLevelNumFmt_Bullet(t *testing.T) {
+func TestExtractLevelSignatures_Empty(t *testing.T) {
+	t.Parallel()
 	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
 		`<w:nsid w:val="AABBCCDD"/>` +
-		`<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl>` +
 		`</w:abstractNum>`
 	el, _ := oxml.ParseXml([]byte(xml))
 
-	got := firstLevelNumFmt(el)
-	if got != "bullet" {
-		t.Errorf("expected bullet, got %q", got)
+	sigs := extractLevelSignatures(el)
+	if len(sigs) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(sigs))
 	}
 }
 
-func TestFirstLevelNumFmt_NoLevel(t *testing.T) {
-	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
-		`<w:nsid w:val="AABBCCDD"/>` +
-		`</w:abstractNum>`
-	el, _ := oxml.ParseXml([]byte(xml))
-
-	got := firstLevelNumFmt(el)
-	if got != "" {
-		t.Errorf("expected empty for no levels, got %q", got)
-	}
-}
-
-func TestFirstLevelNumFmt_NoIlvlZero(t *testing.T) {
-	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
-		`<w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/></w:lvl>` +
-		`<w:lvl w:ilvl="2"><w:numFmt w:val="lowerLetter"/></w:lvl>` +
-		`</w:abstractNum>`
-	el, _ := oxml.ParseXml([]byte(xml))
-
-	got := firstLevelNumFmt(el)
-	if got != "" {
-		t.Errorf("expected empty for no ilvl=0, got %q", got)
-	}
-}
-
-func TestFirstLevelNumFmt_NoNumFmt(t *testing.T) {
+func TestExtractLevelSignatures_MissingNumFmt(t *testing.T) {
+	t.Parallel()
 	xml := `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">` +
 		`<w:lvl w:ilvl="0"><w:lvlText w:val="%1."/></w:lvl>` +
 		`</w:abstractNum>`
 	el, _ := oxml.ParseXml([]byte(xml))
 
-	got := firstLevelNumFmt(el)
-	if got != "" {
-		t.Errorf("expected empty for missing numFmt, got %q", got)
+	sigs := extractLevelSignatures(el)
+	if s := sigs["0"]; s.numFmt != "" {
+		t.Errorf("expected empty numFmt, got %q", s.numFmt)
+	}
+}
+
+// --------------------------------------------------------------------------
+// abstractNumsCompatible tests
+// --------------------------------------------------------------------------
+
+func makeAbstractNum(t *testing.T, xml string) *etree.Element {
+	t.Helper()
+	el, err := oxml.ParseXml([]byte(xml))
+	if err != nil {
+		t.Fatalf("ParseXml: %v", err)
+	}
+	return el
+}
+
+func TestAbstractNumsCompatible_SingleLevel_Same(t *testing.T) {
+	t.Parallel()
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>`)
+	if !abstractNumsCompatible(src, tgt) {
+		t.Error("single level, same numFmt + lvlText → should be compatible")
+	}
+}
+
+func TestAbstractNumsCompatible_SingleLevel_DifferentFmt(t *testing.T) {
+	t.Parallel()
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl></w:abstractNum>`)
+	if abstractNumsCompatible(src, tgt) {
+		t.Error("decimal vs bullet → should not be compatible")
+	}
+}
+
+func TestAbstractNumsCompatible_SingleLevel_DifferentText(t *testing.T) {
+	t.Parallel()
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1)"/></w:lvl></w:abstractNum>`)
+	if abstractNumsCompatible(src, tgt) {
+		t.Error("same numFmt but different lvlText → should not be compatible")
+	}
+}
+
+func TestAbstractNumsCompatible_MultiLevel_AllMatch(t *testing.T) {
+	t.Parallel()
+	lvls := `<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>` +
+		`<w:lvl w:ilvl="1"><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2)"/></w:lvl>` +
+		`<w:lvl w:ilvl="2"><w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%3."/></w:lvl>`
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">`+lvls+`</w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1">`+lvls+`</w:abstractNum>`)
+	if !abstractNumsCompatible(src, tgt) {
+		t.Error("3 levels, all match → should be compatible")
+	}
+}
+
+func TestAbstractNumsCompatible_MultiLevel_Level2Differs(t *testing.T) {
+	t.Parallel()
+	srcLvls := `<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>` +
+		`<w:lvl w:ilvl="1"><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2)"/></w:lvl>` +
+		`<w:lvl w:ilvl="2"><w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%3."/></w:lvl>`
+	tgtLvls := `<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>` +
+		`<w:lvl w:ilvl="1"><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2)"/></w:lvl>` +
+		`<w:lvl w:ilvl="2"><w:numFmt w:val="upperRoman"/><w:lvlText w:val="%3."/></w:lvl>`
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">`+srcLvls+`</w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1">`+tgtLvls+`</w:abstractNum>`)
+	if abstractNumsCompatible(src, tgt) {
+		t.Error("level 2 differs → should not be compatible")
+	}
+}
+
+func TestAbstractNumsCompatible_DifferentLevelCount_OverlapOk(t *testing.T) {
+	t.Parallel()
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>`+
+		`<w:lvl w:ilvl="1"><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2)"/></w:lvl>`+
+		`<w:lvl w:ilvl="2"><w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%3."/></w:lvl>`+
+		`</w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>`+
+		`</w:abstractNum>`)
+	if !abstractNumsCompatible(src, tgt) {
+		t.Error("overlap on level 0, matches → should be compatible")
+	}
+}
+
+func TestAbstractNumsCompatible_NoLevels(t *testing.T) {
+	t.Parallel()
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0"></w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1"></w:abstractNum>`)
+	if abstractNumsCompatible(src, tgt) {
+		t.Error("both empty → should not be compatible")
+	}
+}
+
+func TestAbstractNumsCompatible_OneEmpty(t *testing.T) {
+	t.Parallel()
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0"></w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>`)
+	if abstractNumsCompatible(src, tgt) {
+		t.Error("one empty → should not be compatible (no overlap)")
+	}
+}
+
+func TestAbstractNumsCompatible_NoOverlap(t *testing.T) {
+	t.Parallel()
+	src := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="0">`+
+		`<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>`)
+	tgt := makeAbstractNum(t, `<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:abstractNumId="1">`+
+		`<w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:lvlText w:val="%2."/></w:lvl></w:abstractNum>`)
+	if abstractNumsCompatible(src, tgt) {
+		t.Error("no overlapping ilvl → should not be compatible")
 	}
 }
 

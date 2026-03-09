@@ -3591,6 +3591,150 @@ func TestRWC_KeepSourceNumbering_False_Merged(t *testing.T) {
 	}
 }
 
+// rcSetupNumberingMultiLevel creates a multi-level numbering definition
+// in the document. levels is a slice of [numFmt, lvlText] pairs.
+// Returns the actual numId assigned (auto-incremented by the numbering part).
+func rcSetupNumberingMultiLevel(
+	t *testing.T, doc *Document,
+	levels [][2]string,
+) int {
+	t.Helper()
+	np, err := doc.part.GetOrAddNumberingPart()
+	if err != nil {
+		t.Fatalf("GetOrAddNumberingPart: %v", err)
+	}
+	numbering, err := np.Numbering()
+	if err != nil {
+		t.Fatalf("Numbering: %v", err)
+	}
+
+	absId := numbering.NextAbstractNumId()
+	lvlsXml := ""
+	for i, lv := range levels {
+		lvlsXml += `<w:lvl w:ilvl="` + strconv.Itoa(i) + `">` +
+			`<w:numFmt w:val="` + lv[0] + `"/>` +
+			`<w:lvlText w:val="` + lv[1] + `"/>` +
+			`</w:lvl>`
+	}
+	absNum, _ := oxml.ParseXml([]byte(
+		`<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:abstractNumId="` + strconv.Itoa(absId) + `">` +
+			`<w:nsid w:val="AABB0011"/>` + lvlsXml +
+			`</w:abstractNum>`,
+	))
+	numbering.InsertAbstractNum(absNum)
+	num, err := numbering.AddNumWithAbstractNumId(absId)
+	if err != nil {
+		t.Fatalf("AddNumWithAbstractNumId: %v", err)
+	}
+	numId, err := num.NumId()
+	if err != nil {
+		t.Fatalf("NumId: %v", err)
+	}
+	return numId
+}
+
+func TestRWC_NumMerge_MultiLevel_Compatible(t *testing.T) {
+	t.Parallel()
+	// Source and target with 3-level list, all match →
+	// absNums count unchanged (merged).
+	// Uses taiwaneseCounting to avoid accidental match with default template.
+	levels := [][2]string{
+		{"taiwaneseCounting", "第%1"},
+		{"ideographTraditional", "(%2)"},
+		{"ideographZodiac", "[%3]"},
+	}
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	rcSetupNumberingMultiLevel(t, target, levels)
+
+	tgtNP, _ := target.part.GetOrAddNumberingPart()
+	tgtNum, _ := tgtNP.Numbering()
+	before := len(tgtNum.AllAbstractNums())
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingMultiLevel(t, source, levels)
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "multi level item")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	after := len(tgtNum.AllAbstractNums())
+	if after != before {
+		t.Errorf("compatible multi-level → expected merge (no new absNum), before=%d after=%d",
+			before, after)
+	}
+}
+
+func TestRWC_NumMerge_MultiLevel_Incompatible(t *testing.T) {
+	t.Parallel()
+	// Target: 3 levels (taiwaneseCounting, upperLetter, upperRoman).
+	// Source: 3 levels (taiwaneseCounting, lowerLetter, lowerRoman).
+	// Level 0 matches, levels 1,2 differ → absNums increases (separate).
+	// Uses taiwaneseCounting to avoid accidental match with default template.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	rcSetupNumberingMultiLevel(t, target, [][2]string{
+		{"taiwaneseCounting", "第%1"},
+		{"upperLetter", "%2)"},
+		{"upperRoman", "%3."},
+	})
+
+	tgtNP, _ := target.part.GetOrAddNumberingPart()
+	tgtNum, _ := tgtNP.Numbering()
+	before := len(tgtNum.AllAbstractNums())
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingMultiLevel(t, source, [][2]string{
+		{"taiwaneseCounting", "第%1"},
+		{"lowerLetter", "%2)"},
+		{"lowerRoman", "%3."},
+	})
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "incompatible item")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	after := len(tgtNum.AllAbstractNums())
+	if after <= before {
+		t.Errorf("incompatible multi-level → expected separate absNum, before=%d after=%d",
+			before, after)
+	}
+}
+
+func TestRWC_NumMerge_DifferentLvlText_Separate(t *testing.T) {
+	t.Parallel()
+	// Both taiwaneseCounting + lvl 0, but "第%1" vs "第%1。" →
+	// absNums increases (not merged despite same numFmt).
+	// Uses taiwaneseCounting to avoid accidental match with default template.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	rcSetupNumberingMultiLevel(t, target, [][2]string{{"taiwaneseCounting", "第%1"}})
+
+	tgtNP, _ := target.part.GetOrAddNumberingPart()
+	tgtNum, _ := tgtNP.Numbering()
+	before := len(tgtNum.AllAbstractNums())
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingMultiLevel(t, source, [][2]string{{"taiwaneseCounting", "第%1。"}})
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "different text item")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{Source: source})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	after := len(tgtNum.AllAbstractNums())
+	if after <= before {
+		t.Errorf("different lvlText → expected separate absNum, before=%d after=%d",
+			before, after)
+	}
+}
+
 func TestRWC_DeepImport_RoundTrip(t *testing.T) {
 	t.Parallel()
 	// Integration test: deep import with save → reopen.

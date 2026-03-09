@@ -83,8 +83,9 @@ func (ri *ResourceImporter) importNumbering() error {
 
 		// 5b2. When KeepSourceNumbering is disabled, try to merge into
 		// a matching target list before creating a new abstractNum.
-		// If a compatible list definition exists (same first-level numFmt),
-		// reuse it — the source numbering continues the target sequence.
+		// If a compatible list definition exists (matching numFmt + lvlText
+		// across all overlapping levels), reuse it — the source numbering
+		// continues the target sequence.
 		//
 		// Uses absNumIdMap as cache: if we already resolved this srcAbsId
 		// to a target numId via merge, reuse the same mapping.
@@ -299,14 +300,13 @@ func (ri *ResourceImporter) findMatchingTargetNum(
 	if srcAbsNum == nil {
 		return 0
 	}
-	srcFmt := firstLevelNumFmt(srcAbsNum)
-	if srcFmt == "" {
+	if !hasLevels(srcAbsNum) {
 		return 0
 	}
 
-	// Scan target abstractNums for a matching first-level numFmt.
+	// Scan target abstractNums for a compatible multi-level definition.
 	for _, tgtAbsNum := range tgtNumbering.AllAbstractNums() {
-		if firstLevelNumFmt(tgtAbsNum) != srcFmt {
+		if !abstractNumsCompatible(srcAbsNum, tgtAbsNum) {
 			continue
 		}
 		tgtAbsId := oxml.AbstractNumIdOf(tgtAbsNum)
@@ -321,24 +321,84 @@ func (ri *ResourceImporter) findMatchingTargetNum(
 	return 0
 }
 
-// firstLevelNumFmt returns the w:numFmt/@w:val of the first level
-// (w:ilvl="0") in an <w:abstractNum> element. Returns "" if the level
-// or numFmt is not found.
-//
-// This is the primary signal for list type comparison: "bullet" for
-// unordered lists, "decimal" / "lowerLetter" / "upperRoman" etc. for
-// ordered lists.
-func firstLevelNumFmt(absNum *etree.Element) string {
+// levelSignature holds the identity-defining properties of a single
+// numbering level for merge compatibility checks.
+type levelSignature struct {
+	numFmt  string // w:numFmt/@w:val (e.g. "decimal", "bullet")
+	lvlText string // w:lvlText/@w:val (e.g. "%1.", "•")
+}
+
+// extractLevelSignatures returns a map from ilvl string ("0", "1", ...)
+// to levelSignature for each <w:lvl> in an abstractNum element.
+func extractLevelSignatures(absNum *etree.Element) map[string]levelSignature {
+	sigs := map[string]levelSignature{}
 	for _, child := range absNum.ChildElements() {
-		if child.Space == "w" && child.Tag == "lvl" {
-			if child.SelectAttrValue("w:ilvl", "") == "0" {
-				for _, lvlChild := range child.ChildElements() {
-					if lvlChild.Space == "w" && lvlChild.Tag == "numFmt" {
-						return lvlChild.SelectAttrValue("w:val", "")
-					}
-				}
+		if child.Space != "w" || child.Tag != "lvl" {
+			continue
+		}
+		ilvl := child.SelectAttrValue("w:ilvl", "")
+		if ilvl == "" {
+			continue
+		}
+		var sig levelSignature
+		for _, lc := range child.ChildElements() {
+			if lc.Space != "w" {
+				continue
+			}
+			switch lc.Tag {
+			case "numFmt":
+				sig.numFmt = lc.SelectAttrValue("w:val", "")
+			case "lvlText":
+				sig.lvlText = lc.SelectAttrValue("w:val", "")
 			}
 		}
+		sigs[ilvl] = sig
 	}
-	return ""
+	return sigs
+}
+
+// hasLevels reports whether an abstractNum element contains at least one
+// <w:lvl> child.
+func hasLevels(absNum *etree.Element) bool {
+	for _, child := range absNum.ChildElements() {
+		if child.Space == "w" && child.Tag == "lvl" {
+			return true
+		}
+	}
+	return false
+}
+
+// abstractNumsCompatible reports whether two abstractNum definitions are
+// semantically compatible for list merging. Two definitions are compatible
+// when every level present in BOTH has identical numFmt and lvlText values.
+//
+// Levels present in only one definition are ignored — Word handles missing
+// levels gracefully by falling back to the definition that has them.
+//
+// Returns false if either has no levels or if no levels overlap.
+//
+// Note: w:start/@w:val (start number) is intentionally excluded from
+// comparison. Aspose considers lists with same numFmt/lvlText but different
+// start values compatible for merging — Word adjusts continuation numbering
+// automatically.
+func abstractNumsCompatible(src, tgt *etree.Element) bool {
+	srcSigs := extractLevelSignatures(src)
+	tgtSigs := extractLevelSignatures(tgt)
+
+	if len(srcSigs) == 0 || len(tgtSigs) == 0 {
+		return false
+	}
+
+	overlap := 0
+	for ilvl, srcSig := range srcSigs {
+		tgtSig, ok := tgtSigs[ilvl]
+		if !ok {
+			continue
+		}
+		overlap++
+		if srcSig.numFmt != tgtSig.numFmt || srcSig.lvlText != tgtSig.lvlText {
+			return false
+		}
+	}
+	return overlap > 0
 }
