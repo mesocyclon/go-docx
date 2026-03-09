@@ -27,7 +27,7 @@ import (
 // ImportFormatMode controls how style conflicts between source and target
 // documents are resolved during content import.
 //
-// This mirrors Aspose.Words ImportFormatMode — the industry-standard
+// ImportFormatMode — the industry-standard
 // document processing library — providing three well-defined strategies
 // for handling style ID collisions.
 //
@@ -64,7 +64,7 @@ const (
 // behavior beyond what ImportFormatMode alone offers.
 //
 // All fields default to false (zero value), preserving backward compatibility.
-// This mirrors Aspose.Words ImportFormatOptions.
+// This ImportFormatOptions.
 type ImportFormatOptions struct {
 	// ForceCopyStyles forces conflicting styles to be copied into the target
 	// with a unique suffix (_0, _1, ...) instead of expanding formatting
@@ -72,7 +72,7 @@ type ImportFormatOptions struct {
 	// For KeepDifferentStyles this option is irrelevant — copying on
 	// conflict is always performed automatically.
 	//
-	// Mirrors Aspose.Words ImportFormatOptions.ForceCopyStyles.
+	// ImportFormatOptions.ForceCopyStyles.
 	ForceCopyStyles bool
 
 	// KeepSourceNumbering preserves source list numbering as a separate
@@ -82,7 +82,7 @@ type ImportFormatOptions struct {
 	// Current project behavior is equivalent to KeepSourceNumbering=true
 	// (always creates separate list definitions).
 	//
-	// Mirrors Aspose.Words ImportFormatOptions.KeepSourceNumbering.
+	// ImportFormatOptions.KeepSourceNumbering.
 	KeepSourceNumbering bool
 
 	// IgnoreHeaderFooter controls whether source formatting is applied
@@ -96,10 +96,10 @@ type ImportFormatOptions struct {
 	// When false (default), headers/footers are processed identically
 	// to the document body.
 	//
-	// Aspose.Words default: true. Go zero-value: false (backward
+	// default: true. Go zero-value: false (backward
 	// compatible — existing behavior unchanged).
 	//
-	// Mirrors Aspose.Words ImportFormatOptions.IgnoreHeaderFooter.
+	// ImportFormatOptions.IgnoreHeaderFooter.
 	IgnoreHeaderFooter bool
 
 	// MergePastedLists merges inserted list paragraphs with adjacent
@@ -111,7 +111,7 @@ type ImportFormatOptions struct {
 	// earlier paragraph's numId so Word treats them as one continuous list.
 	// When false (default), inserted lists remain independent.
 	//
-	// Mirrors Aspose.Words ImportFormatOptions.MergePastedLists.
+	// ImportFormatOptions.MergePastedLists.
 	MergePastedLists bool
 }
 

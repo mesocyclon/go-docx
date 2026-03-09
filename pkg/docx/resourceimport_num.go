@@ -376,11 +376,6 @@ func hasLevels(absNum *etree.Element) bool {
 // levels gracefully by falling back to the definition that has them.
 //
 // Returns false if either has no levels or if no levels overlap.
-//
-// Note: w:start/@w:val (start number) is intentionally excluded from
-// comparison. Aspose considers lists with same numFmt/lvlText but different
-// start values compatible for merging — Word adjusts continuation numbering
-// automatically.
 func abstractNumsCompatible(src, tgt *etree.Element) bool {
 	srcSigs := extractLevelSignatures(src)
 	tgtSigs := extractLevelSignatures(tgt)

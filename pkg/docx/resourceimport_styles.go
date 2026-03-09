@@ -263,7 +263,7 @@ func (ri *ResourceImporter) mergeOneStyle(srcStyle *oxml.CT_Style) error {
 			// Same formatting → use target (like UseDestinationStyles).
 			ri.styleMap[id] = targetId
 		} else {
-			// Aspose.Words KeepDifferentStyles: different formatting →
+			// KeepDifferentStyles: different formatting →
 			// always copy with unique suffix. ForceCopyStyles is irrelevant
 			// for this mode (it's a KeepSourceFormatting-only option).
 			return ri.copyStyleToTarget(srcStyle, ri.uniqueStyleId(id))
@@ -355,8 +355,6 @@ func (ri *ResourceImporter) targetDefaultParaStyleId() string {
 // uniqueStyleId generates a unique styleId by appending _0, _1, etc. to
 // the base ID. Checks both the target styles.xml and the current styleMap
 // to avoid collisions with styles already imported in this session.
-//
-// Mirrors the Aspose.Words naming convention for ForceCopyStyles.
 func (ri *ResourceImporter) uniqueStyleId(base string) string {
 	tgtStyles, _ := ri.targetStyles()
 	for i := 0; ; i++ {
@@ -469,10 +467,6 @@ func (ri *ResourceImporter) remapStyleRefsInElement(el *etree.Element) {
 // and target documents. If they differ (by styleId), sets srcDefaultParaStyleId
 // so that materializeImplicitStyles can add explicit pStyle to paragraphs
 // that rely on the implicit default.
-//
-// This mirrors Aspose.Words behavior: when source default ≠ target default,
-// paragraphs without explicit pStyle get the source default materialized
-// to preserve their appearance.
 func (ri *ResourceImporter) detectDefaultStyleMismatch() error {
 	srcStyles, err := ri.sourceStyles()
 	if err != nil {
@@ -579,12 +573,6 @@ func materializePStyle(p *etree.Element, styleId string) {
 // stylesEffectiveEqual compares two styles by their resolved effective
 // formatting, walking the full basedOn chain in each document's styles.
 //
-// Mirrors Aspose.Words Style.Equals():
-//   - Recursively compares basedOn/linked chains
-//   - Excludes docDefaults (per Aspose: "Styles defaults are not
-//     included in comparison")
-//   - Ignores w:name and rsid* attributes
-//
 // Method on ResourceImporter because it needs access to both
 // sourceStyles() and targetStyles() for chain resolution.
 func (ri *ResourceImporter) stylesEffectiveEqual(srcStyle, tgtStyle *oxml.CT_Style) bool {
@@ -674,8 +662,7 @@ func stripRsidRecursive(el *etree.Element) {
 // definitions.
 //
 // Handles BOTH paragraph styles (pStyle → pPr + rPr) and character styles
-// (rStyle → rPr). This mirrors Aspose.Words which expands both style types
-// to direct attributes.
+// (rStyle → rPr).
 //
 // Pipeline position: after materializeImplicitStyles, before remapAll.
 // expandDirectFormatting reads original (unmapped) styleIds; remapAll then

@@ -36,7 +36,7 @@ type ContentData struct {
 
 ### Format (ImportFormatMode)
 
-Стратегия разрешения конфликтов стилей между исходным и целевым документами. Аналог `Aspose.Words.ImportFormatMode`.
+Стратегия разрешения конфликтов стилей между исходным и целевым документами.
 
 ```go
 type ImportFormatMode int
