@@ -1,10 +1,13 @@
 package parts
 
 import (
+	"bytes"
+	"testing"
+
 	"github.com/beevik/etree"
 	"github.com/vortex/go-docx/internal/xmlutil"
+	"github.com/vortex/go-docx/pkg/docx/enum"
 	"github.com/vortex/go-docx/pkg/docx/opc"
-	"testing"
 )
 
 func makeElementWithIDs(ids ...string) *etree.Element {
@@ -146,4 +149,198 @@ func newTestStoryPart(t *testing.T, el *etree.Element) *StoryPart {
 	t.Helper()
 	xp := opc.NewXmlPartFromElement("", "", el, nil)
 	return &StoryPart{XmlPart: xp}
+}
+
+// =========================================================================
+// StoryPart — story.go
+// =========================================================================
+
+func TestNewStoryPart(t *testing.T) {
+	el := etree.NewElement("w:body")
+	xp := opc.NewXmlPartFromElement("/word/document.xml", opc.CTWmlDocumentMain, el, nil)
+	sp := NewStoryPart(xp)
+	if sp == nil {
+		t.Fatal("NewStoryPart returned nil")
+	}
+	if sp.Element() != el {
+		t.Error("NewStoryPart should wrap the element")
+	}
+}
+
+func TestStoryPart_DocumentPart_NoPackage(t *testing.T) {
+	el := etree.NewElement("w:hdr")
+	xp := opc.NewXmlPartFromElement("/word/header1.xml", opc.CTWmlHeader, el, nil)
+	sp := NewStoryPart(xp)
+
+	// documentPart() should error if no package is set
+	_, err := sp.GetStyle(nil, enum.WdStyleTypeParagraph)
+	if err == nil {
+		t.Error("GetStyle should error when no package/document part available")
+	}
+}
+
+func TestStoryPart_GetStyle_DelegatesToDocPart(t *testing.T) {
+	dp, pkg := newDocPartWithBody(t)
+	wireStylesPartFromXML(t, dp, pkg, stylesXML("Normal", "Normal", true))
+
+	// Create a header part wired to the same package
+	hp, _, err := dp.AddHeaderPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// hp.StoryPart should delegate GetStyle to dp
+	s, err := hp.GetStyle(nil, enum.WdStyleTypeParagraph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s == nil {
+		t.Error("header StoryPart.GetStyle should resolve through document part")
+	}
+}
+
+func TestStoryPart_GetStyleID_DelegatesToDocPart(t *testing.T) {
+	dp, pkg := newDocPartWithBody(t)
+	wireStylesPartFromXML(t, dp, pkg, stylesXML("Normal", "Normal", true))
+
+	hp, _, err := dp.AddHeaderPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := hp.GetStyleID(nil, enum.WdStyleTypeParagraph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != nil {
+		t.Errorf("GetStyleID(nil) should return nil, got %v", *id)
+	}
+}
+
+func TestStoryPart_WmlPackage_Nil(t *testing.T) {
+	el := etree.NewElement("w:body")
+	xp := opc.NewXmlPartFromElement("/word/document.xml", opc.CTWmlDocumentMain, el, nil)
+	sp := NewStoryPart(xp)
+	wp := sp.wmlPackage()
+	if wp != nil {
+		t.Error("wmlPackage should return nil when no package set")
+	}
+}
+
+func TestStoryPart_WmlPackage_NotNil(t *testing.T) {
+	pkg := openDefaultDocx(t)
+	wp := NewWmlPackage(pkg)
+	pkg.SetAppPackage(wp)
+
+	dp := getDocumentPart(t, pkg)
+	got := dp.wmlPackage()
+	if got != wp {
+		t.Error("wmlPackage should return the WmlPackage from OpcPackage.AppPackage")
+	}
+}
+
+// =========================================================================
+// StoryPart.GetOrAddImage / NewPicInline — story.go
+// =========================================================================
+
+func TestStoryPart_GetOrAddImage(t *testing.T) {
+	pkg := openDefaultDocx(t)
+	dp := getDocumentPart(t, pkg)
+
+	blob := []byte("fake image data")
+	ip := NewImagePartWithMeta("/word/media/image1.png", opc.CTPng, blob, 100, 100, 96, 96, "test.png")
+	pkg.AddPart(ip)
+
+	rId, result := dp.GetOrAddImage(ip)
+	if rId == "" {
+		t.Error("GetOrAddImage returned empty rId")
+	}
+	if result != ip {
+		t.Error("GetOrAddImage should return same image part")
+	}
+
+	// Call again — should return same rId (idempotent via GetOrAdd)
+	rId2, _ := dp.GetOrAddImage(ip)
+	if rId2 != rId {
+		t.Errorf("GetOrAddImage not idempotent: rId1=%q, rId2=%q", rId, rId2)
+	}
+}
+
+func TestStoryPart_NewPicInline(t *testing.T) {
+	pkg := openDefaultDocx(t)
+	dp := getDocumentPart(t, pkg)
+
+	ip := NewImagePartWithMeta("/word/media/image1.png", opc.CTPng, nil, 100, 200, 96, 96, "test.png")
+	pkg.AddPart(ip)
+
+	inline, err := dp.NewPicInline(ip, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inline == nil {
+		t.Fatal("NewPicInline returned nil")
+	}
+}
+
+// =========================================================================
+// StoryPart.GetOrAddImageFromReader / NewPicInlineFromReader — story.go
+// =========================================================================
+
+func TestStoryPart_GetOrAddImageFromReader_NoWmlPackage(t *testing.T) {
+	el := etree.NewElement("w:body")
+	xp := opc.NewXmlPartFromElement("/word/document.xml", opc.CTWmlDocumentMain, el, nil)
+	sp := NewStoryPart(xp)
+
+	r := bytes.NewReader(minimumPNG())
+	_, _, err := sp.GetOrAddImageFromReader(r)
+	if err == nil {
+		t.Error("GetOrAddImageFromReader should error without WmlPackage")
+	}
+}
+
+func TestStoryPart_GetOrAddImageFromReader(t *testing.T) {
+	pkg := openDefaultDocx(t)
+	wp := NewWmlPackage(pkg)
+	pkg.SetAppPackage(wp)
+	dp := getDocumentPart(t, pkg)
+
+	pngBlob := minimumPNG()
+	r := bytes.NewReader(pngBlob)
+	rId, ip, err := dp.GetOrAddImageFromReader(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rId == "" {
+		t.Error("rId is empty")
+	}
+	if ip == nil {
+		t.Fatal("image part is nil")
+	}
+
+	// Verify dedup: adding same image again returns same part
+	r2 := bytes.NewReader(pngBlob)
+	rId2, ip2, err := dp.GetOrAddImageFromReader(r2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ip2 != ip {
+		t.Error("same image blob should be deduped")
+	}
+	if rId2 != rId {
+		t.Errorf("same image should get same rId: %q vs %q", rId, rId2)
+	}
+}
+
+func TestStoryPart_NewPicInlineFromReader(t *testing.T) {
+	pkg := openDefaultDocx(t)
+	wp := NewWmlPackage(pkg)
+	pkg.SetAppPackage(wp)
+	dp := getDocumentPart(t, pkg)
+
+	r := bytes.NewReader(minimumPNG())
+	inline, err := dp.NewPicInlineFromReader(r, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inline == nil {
+		t.Fatal("NewPicInlineFromReader returned nil")
+	}
 }

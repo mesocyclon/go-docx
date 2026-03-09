@@ -132,3 +132,32 @@ func TestNewCtString(t *testing.T) {
 		t.Errorf("expected val='Heading1', got %q", v)
 	}
 }
+
+func TestBodySetSectPr(t *testing.T) {
+	t.Parallel()
+	bodyEl := OxmlElement("w:body")
+	body := &CT_Body{Element{e: bodyEl}}
+
+	sectPrEl := OxmlElement("w:sectPr")
+	sectPr := &CT_SectPr{Element{e: sectPrEl}}
+	sectPr.e.CreateAttr("w:rsidR", "test123")
+
+	body.SetSectPr(sectPr)
+
+	// Verify sectPr is present
+	got := body.SectPr()
+	if got == nil {
+		t.Fatal("expected sectPr after SetSectPr")
+	}
+
+	// Replace with a new one
+	sectPr2El := OxmlElement("w:sectPr")
+	sectPr2 := &CT_SectPr{Element{e: sectPr2El}}
+	sectPr2.e.CreateAttr("w:rsidR", "new456")
+
+	body.SetSectPr(sectPr2)
+	got2 := body.SectPr()
+	if got2 == nil {
+		t.Fatal("expected new sectPr")
+	}
+}

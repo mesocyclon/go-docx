@@ -351,3 +351,110 @@ func TestTryOxmlElement(t *testing.T) {
 		}
 	})
 }
+
+func TestLookupNsURI(t *testing.T) {
+	t.Parallel()
+
+	t.Run("known prefix", func(t *testing.T) {
+		uri, ok := LookupNsURI("w")
+		if !ok || uri != NsWml {
+			t.Errorf("LookupNsURI(w) = (%q, %v), want (%q, true)", uri, ok, NsWml)
+		}
+	})
+	t.Run("unknown prefix", func(t *testing.T) {
+		_, ok := LookupNsURI("zzz")
+		if ok {
+			t.Error("LookupNsURI(zzz) should return false")
+		}
+	})
+}
+
+func TestLookupPrefix(t *testing.T) {
+	t.Parallel()
+
+	t.Run("known URI", func(t *testing.T) {
+		pfx, ok := LookupPrefix(NsWml)
+		if !ok || pfx != "w" {
+			t.Errorf("LookupPrefix(NsWml) = (%q, %v), want (w, true)", pfx, ok)
+		}
+	})
+	t.Run("unknown URI", func(t *testing.T) {
+		_, ok := LookupPrefix("http://example.com/unknown")
+		if ok {
+			t.Error("LookupPrefix(unknown) should return false")
+		}
+	})
+}
+
+func TestResolveNspTag_NoPrefix(t *testing.T) {
+	t.Parallel()
+	prefix, local := resolveNspTag("body")
+	if prefix != "" || local != "body" {
+		t.Errorf("resolveNspTag(body) = (%q, %q), want ('', 'body')", prefix, local)
+	}
+}
+
+func TestNewNSPTag_Panic(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("NewNSPTag with invalid tag should panic")
+		}
+	}()
+	NewNSPTag("invalidnocolon")
+}
+
+func TestNSPTagFromClark_Panic(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("NSPTagFromClark with invalid clark should panic")
+		}
+	}()
+	NSPTagFromClark("notclark")
+}
+
+func TestParseNSPTagFromClark_Errors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty string", func(t *testing.T) {
+		_, err := ParseNSPTagFromClark("")
+		if err == nil {
+			t.Error("expected error")
+		}
+	})
+	t.Run("no closing brace", func(t *testing.T) {
+		_, err := ParseNSPTagFromClark("{http://example.com")
+		if err == nil {
+			t.Error("expected error")
+		}
+	})
+	t.Run("unknown URI", func(t *testing.T) {
+		_, err := ParseNSPTagFromClark("{http://unknown.example.com}tag")
+		if err == nil {
+			t.Error("expected error")
+		}
+	})
+}
+
+func TestNSPTag_Methods(t *testing.T) {
+	t.Parallel()
+	tag := NewNSPTag("w:p")
+
+	if tag.Prefix() != "w" {
+		t.Errorf("Prefix() = %q, want w", tag.Prefix())
+	}
+	if tag.LocalPart() != "p" {
+		t.Errorf("LocalPart() = %q, want p", tag.LocalPart())
+	}
+	if tag.NsURI() != NsWml {
+		t.Errorf("NsURI() = %q, want %q", tag.NsURI(), NsWml)
+	}
+	if tag.String() != "w:p" {
+		t.Errorf("String() = %q, want w:p", tag.String())
+	}
+	nsm := tag.NsMap()
+	if nsm["w"] != NsWml {
+		t.Errorf("NsMap() = %v", nsm)
+	}
+}

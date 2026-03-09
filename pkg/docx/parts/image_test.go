@@ -1,11 +1,14 @@
 package parts
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
+	goimage "image"
 	"math"
 	"testing"
 
+	"github.com/vortex/go-docx/pkg/docx/image"
 	"github.com/vortex/go-docx/pkg/docx/opc"
 )
 
@@ -244,3 +247,108 @@ func TestScaledDimensions_BothSpecified(t *testing.T) {
 		t.Errorf("ScaledDimensions(&111,&222) = (%d,%d), want (111,222)", cx, cy)
 	}
 }
+
+// =========================================================================
+// ImagePart — SetImageMeta, ensureMeta, NewImagePartFromImage
+// =========================================================================
+
+func TestImagePart_SetImageMeta(t *testing.T) {
+	ip := NewImagePart("/word/media/image1.png", opc.CTPng, nil, nil)
+	ip.SetImageMeta(800, 600, 150, 150)
+
+	w, err := ip.PxWidth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w != 800 {
+		t.Errorf("PxWidth = %d, want 800", w)
+	}
+
+	h, err := ip.PxHeight()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h != 600 {
+		t.Errorf("PxHeight = %d, want 600", h)
+	}
+
+	hd, err := ip.HorzDpi()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hd != 150 {
+		t.Errorf("HorzDpi = %d, want 150", hd)
+	}
+
+	vd, err := ip.VertDpi()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vd != 150 {
+		t.Errorf("VertDpi = %d, want 150", vd)
+	}
+}
+
+func TestImagePart_LazyMetaFromBlob(t *testing.T) {
+	// Create ImagePart with a real PNG blob (no metadata set upfront).
+	// ensureMeta should parse the blob automatically.
+	pngBlob := minimumPNG()
+	ip := NewImagePart("/word/media/image1.png", opc.CTPng, pngBlob, nil)
+
+	w, err := ip.PxWidth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w != 1 {
+		t.Errorf("PxWidth = %d, want 1 (1x1 PNG)", w)
+	}
+
+	h, err := ip.PxHeight()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h != 1 {
+		t.Errorf("PxHeight = %d, want 1", h)
+	}
+}
+
+func TestImagePart_EnsureMeta_EmptyBlob(t *testing.T) {
+	ip := NewImagePart("/word/media/image1.png", opc.CTPng, []byte{}, nil)
+	_, err := ip.PxWidth()
+	if err == nil {
+		t.Error("PxWidth should error on empty blob")
+	}
+}
+
+func TestImagePart_NewImagePartFromImage(t *testing.T) {
+	pngBlob := minimumPNG()
+	// Verify blob is valid
+	_, _, err := goimage.Decode(bytes.NewReader(pngBlob))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imgLib, err := image.FromBlob(pngBlob, "photo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ip := NewImagePartFromImage(imgLib, pngBlob)
+	if ip == nil {
+		t.Fatal("NewImagePartFromImage returned nil")
+	}
+	fn := ip.Filename()
+	if fn == "" {
+		t.Error("Filename should not be empty")
+	}
+
+	// Hash should be carried from Image
+	h, err := ip.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == "" {
+		t.Error("Hash should not be empty")
+	}
+}
+

@@ -3,6 +3,7 @@ package oxml
 import (
 	"testing"
 
+	"github.com/beevik/etree"
 	"github.com/vortex/go-docx/pkg/docx/enum"
 )
 
@@ -488,5 +489,149 @@ func TestCT_LsdException_OnOffProp(t *testing.T) {
 	}
 	if exc.OnOffProp("w:locked") != nil {
 		t.Error("expected nil after removal")
+	}
+}
+
+func TestGetStyleIDByName(t *testing.T) {
+	t.Parallel()
+	styles := &CT_Styles{Element{e: OxmlElement("w:styles")}}
+
+	// Add Normal as default paragraph style
+	normal := styles.AddStyle()
+	xmlType, _ := enum.WdStyleTypeParagraph.ToXml()
+	_ = normal.SetStyleId("Normal")
+	_ = normal.SetNameVal("Normal")
+	_ = normal.SetType(xmlType)
+	_ = normal.SetDefault(true)
+
+	// Add Heading 1 as non-default
+	h1 := styles.AddStyle()
+	_ = h1.SetStyleId("Heading1")
+	_ = h1.SetNameVal("heading 1")
+	_ = h1.SetType(xmlType)
+
+	t.Run("returns nil for default style", func(t *testing.T) {
+		t.Parallel()
+		result, err := styles.GetStyleIDByName("Normal", enum.WdStyleTypeParagraph)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != nil {
+			t.Errorf("expected nil for default style, got %q", *result)
+		}
+	})
+
+	t.Run("returns style ID for non-default", func(t *testing.T) {
+		t.Parallel()
+		// "Heading 1" → BabelFish → "heading 1" → found by name
+		result, err := styles.GetStyleIDByName("Heading 1", enum.WdStyleTypeParagraph)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil || *result != "Heading1" {
+			t.Errorf("expected Heading1, got %v", result)
+		}
+	})
+
+	t.Run("fallback to ID lookup", func(t *testing.T) {
+		t.Parallel()
+		// "Heading1" is not a name — but it is an ID
+		result, err := styles.GetStyleIDByName("Heading1", enum.WdStyleTypeParagraph)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil || *result != "Heading1" {
+			t.Errorf("expected Heading1, got %v", result)
+		}
+	})
+
+	t.Run("not found returns error", func(t *testing.T) {
+		t.Parallel()
+		_, err := styles.GetStyleIDByName("NoSuchStyle", enum.WdStyleTypeParagraph)
+		if err == nil {
+			t.Error("expected error for unknown style")
+		}
+	})
+
+	t.Run("type mismatch returns error", func(t *testing.T) {
+		t.Parallel()
+		_, err := styles.GetStyleIDByName("Heading 1", enum.WdStyleTypeCharacter)
+		if err == nil {
+			t.Error("expected error for type mismatch")
+		}
+	})
+}
+
+func TestDocDefaultsRPr(t *testing.T) {
+	t.Parallel()
+	stylesXML := `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+		<w:docDefaults>
+			<w:rPrDefault>
+				<w:rPr><w:sz w:val="24"/></w:rPr>
+			</w:rPrDefault>
+		</w:docDefaults>
+	</w:styles>`
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(stylesXML); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	styles := &CT_Styles{Element{e: doc.Root()}}
+
+	rPr := styles.DocDefaultsRPr()
+	if rPr == nil {
+		t.Fatal("expected non-nil DocDefaultsRPr")
+	}
+	sz := rPr.FindElement("w:sz")
+	if sz == nil {
+		t.Fatal("expected w:sz child")
+	}
+}
+
+func TestDocDefaultsPPr(t *testing.T) {
+	t.Parallel()
+	stylesXML := `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+		<w:docDefaults>
+			<w:pPrDefault>
+				<w:pPr><w:spacing w:after="200"/></w:pPr>
+			</w:pPrDefault>
+		</w:docDefaults>
+	</w:styles>`
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(stylesXML); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	styles := &CT_Styles{Element{e: doc.Root()}}
+
+	pPr := styles.DocDefaultsPPr()
+	if pPr == nil {
+		t.Fatal("expected non-nil DocDefaultsPPr")
+	}
+}
+
+func TestDocDefaultsRPr_Nil(t *testing.T) {
+	t.Parallel()
+	styles := &CT_Styles{Element{e: OxmlElement("w:styles")}}
+	if styles.DocDefaultsRPr() != nil {
+		t.Error("expected nil when no docDefaults")
+	}
+	if styles.DocDefaultsPPr() != nil {
+		t.Error("expected nil when no docDefaults")
+	}
+}
+
+func TestSetBasedOnVal_Clear(t *testing.T) {
+	t.Parallel()
+	styles := &CT_Styles{Element{e: OxmlElement("w:styles")}}
+	s := styles.AddStyle()
+	_ = s.SetBasedOnVal("Normal")
+	if err := s.SetBasedOnVal(""); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.BasedOnVal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != "" {
+		t.Errorf("expected empty after clear, got %q", v)
 	}
 }

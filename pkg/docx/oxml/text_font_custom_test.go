@@ -433,3 +433,104 @@ func TestCT_RPr_RFontsHAnsi_RoundTrip(t *testing.T) {
 		t.Fatalf("SetRFontsHAnsi nil: %v", err)
 	}
 }
+
+func newRPr() *CT_RPr {
+	return &CT_RPr{Element{e: OxmlElement("w:rPr")}}
+}
+
+func TestComplexScriptVal(t *testing.T) {
+	t.Parallel()
+	rPr := newRPr()
+
+	if rPr.ComplexScriptVal() != nil {
+		t.Error("expected nil by default")
+	}
+
+	tr := true
+	if err := rPr.SetComplexScriptVal(&tr); err != nil {
+		t.Fatal(err)
+	}
+	v := rPr.ComplexScriptVal()
+	if v == nil || !*v {
+		t.Error("expected true")
+	}
+
+	if err := rPr.SetComplexScriptVal(nil); err != nil {
+		t.Fatal(err)
+	}
+	if rPr.ComplexScriptVal() != nil {
+		t.Error("expected nil after clearing")
+	}
+}
+
+func TestCsBoldVal(t *testing.T) {
+	t.Parallel()
+	rPr := newRPr()
+
+	if rPr.CsBoldVal() != nil {
+		t.Error("expected nil")
+	}
+
+	tr := true
+	if err := rPr.SetCsBoldVal(&tr); err != nil {
+		t.Fatal(err)
+	}
+	if v := rPr.CsBoldVal(); v == nil || !*v {
+		t.Error("expected true")
+	}
+
+	if err := rPr.SetCsBoldVal(nil); err != nil {
+		t.Fatal(err)
+	}
+	if rPr.CsBoldVal() != nil {
+		t.Error("expected nil")
+	}
+}
+
+func TestCsItalicVal(t *testing.T) {
+	t.Parallel()
+	rPr := newRPr()
+
+	tr := true
+	if err := rPr.SetCsItalicVal(&tr); err != nil {
+		t.Fatal(err)
+	}
+	if v := rPr.CsItalicVal(); v == nil || !*v {
+		t.Error("expected true")
+	}
+
+	if err := rPr.SetCsItalicVal(nil); err != nil {
+		t.Fatal(err)
+	}
+	if rPr.CsItalicVal() != nil {
+		t.Error("expected nil")
+	}
+}
+
+func TestRtlVal(t *testing.T) {
+	t.Parallel()
+	rPr := newRPr()
+
+	tr := true
+	if err := rPr.SetRtlVal(&tr); err != nil {
+		t.Fatal(err)
+	}
+	if v := rPr.RtlVal(); v == nil || !*v {
+		t.Error("expected true")
+	}
+
+	f := false
+	if err := rPr.SetRtlVal(&f); err != nil {
+		t.Fatal(err)
+	}
+	if v := rPr.RtlVal(); v == nil || *v {
+		t.Error("expected false")
+	}
+
+	if err := rPr.SetRtlVal(nil); err != nil {
+		t.Fatal(err)
+	}
+	if rPr.RtlVal() != nil {
+		t.Error("expected nil")
+	}
+}

@@ -289,3 +289,40 @@ func TestCT_HdrFtr_InnerContentElements(t *testing.T) {
 		t.Errorf("expected 2, got %d", len(elems))
 	}
 }
+
+func TestSectPrSetPageHeight(t *testing.T) {
+	t.Parallel()
+	sectPrEl := OxmlElement("w:sectPr")
+	sp := &CT_SectPr{Element{e: sectPrEl}}
+
+	h := 15840
+	if err := sp.SetPageHeight(&h); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sp.PageHeight()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != 15840 {
+		t.Errorf("PageHeight = %v, want 15840", got)
+	}
+}
+
+func TestSectPrGetFooterRef(t *testing.T) {
+	t.Parallel()
+	sectPrEl := OxmlElement("w:sectPr")
+	sp := &CT_SectPr{Element{e: sectPrEl}}
+
+	// Add footer ref
+	_, err := sp.AddFooterRef(enum.WdHeaderFooterIndexPrimary, "rId1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := sp.GetFooterRef(enum.WdHeaderFooterIndexPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref == nil {
+		t.Error("expected non-nil footer ref")
+	}
+}

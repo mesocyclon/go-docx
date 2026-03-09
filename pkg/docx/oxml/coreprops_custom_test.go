@@ -287,3 +287,22 @@ func TestParseW3CDTF_WithOffset(t *testing.T) {
 		t.Errorf("expected 15:30 UTC, got %d:%d", dt.Hour(), dt.Minute())
 	}
 }
+
+func TestIdentifierText(t *testing.T) {
+	t.Parallel()
+	cp, err := NewCoreProperties()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cp.IdentifierText() != "" {
+		t.Error("expected empty string by default")
+	}
+
+	if err := cp.SetIdentifierText("urn:isbn:123"); err != nil {
+		t.Fatal(err)
+	}
+	if got := cp.IdentifierText(); got != "urn:isbn:123" {
+		t.Errorf("IdentifierText() = %q, want urn:isbn:123", got)
+	}
+}

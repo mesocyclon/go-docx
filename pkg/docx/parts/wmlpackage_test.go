@@ -3,6 +3,7 @@ package parts
 import (
 	"testing"
 
+	"github.com/beevik/etree"
 	"github.com/vortex/go-docx/pkg/docx/opc"
 )
 
@@ -163,5 +164,104 @@ func TestWmlPackage_GetOrAddImagePart_Different(t *testing.T) {
 	}
 	if wp.ImageParts().Len() != 2 {
 		t.Errorf("image parts count = %d, want 2", wp.ImageParts().Len())
+	}
+}
+
+// =========================================================================
+// WmlPackage.AfterUnmarshal — wmlpackage.go
+// =========================================================================
+
+func TestWmlPackage_AfterUnmarshal_GathersImages(t *testing.T) {
+	pkg := opc.NewOpcPackage(nil)
+	wp := NewWmlPackage(pkg)
+
+	// Create a document part with an image relationship
+	el := etree.NewElement("w:document")
+	xp := opc.NewXmlPartFromElement("/word/document.xml", opc.CTWmlDocumentMain, el, pkg)
+	dp := NewDocumentPart(xp)
+	pkg.AddPart(dp)
+	pkg.RelateTo(dp, opc.RTOfficeDocument)
+
+	ip := NewImagePart("/word/media/image1.png", opc.CTPng, []byte("data"), pkg)
+	pkg.AddPart(ip)
+	dp.Rels().GetOrAdd(opc.RTImage, ip)
+
+	if wp.ImageParts().Len() != 0 {
+		t.Fatal("should start with 0 image parts")
+	}
+
+	wp.AfterUnmarshal()
+
+	if wp.ImageParts().Len() != 1 {
+		t.Errorf("AfterUnmarshal should gather image parts: got %d, want 1", wp.ImageParts().Len())
+	}
+}
+
+func TestWmlPackage_AfterUnmarshal_SkipsDuplicates(t *testing.T) {
+	pkg := opc.NewOpcPackage(nil)
+	wp := NewWmlPackage(pkg)
+
+	el := etree.NewElement("w:document")
+	xp := opc.NewXmlPartFromElement("/word/document.xml", opc.CTWmlDocumentMain, el, pkg)
+	dp := NewDocumentPart(xp)
+	pkg.AddPart(dp)
+	pkg.RelateTo(dp, opc.RTOfficeDocument)
+
+	ip := NewImagePart("/word/media/image1.png", opc.CTPng, []byte("data"), pkg)
+	pkg.AddPart(ip)
+	// Wire same image via two different relationships
+	dp.Rels().GetOrAdd(opc.RTImage, ip)
+
+	wp.AfterUnmarshal()
+	wp.AfterUnmarshal() // second call
+
+	if wp.ImageParts().Len() != 1 {
+		t.Errorf("AfterUnmarshal should skip duplicates: got %d, want 1", wp.ImageParts().Len())
+	}
+}
+
+func TestWmlPackage_AfterUnmarshal_SkipsExternal(t *testing.T) {
+	pkg := opc.NewOpcPackage(nil)
+	wp := NewWmlPackage(pkg)
+
+	// No image rels — just an external rel (won't have TargetPart)
+	el := etree.NewElement("w:document")
+	xp := opc.NewXmlPartFromElement("/word/document.xml", opc.CTWmlDocumentMain, el, pkg)
+	dp := NewDocumentPart(xp)
+	pkg.AddPart(dp)
+	pkg.RelateTo(dp, opc.RTOfficeDocument)
+
+	wp.AfterUnmarshal()
+
+	if wp.ImageParts().Len() != 0 {
+		t.Errorf("AfterUnmarshal should ignore non-image rels: got %d, want 0", wp.ImageParts().Len())
+	}
+}
+
+// =========================================================================
+// ImageParts.All — wmlpackage.go
+// =========================================================================
+
+func TestImageParts_All(t *testing.T) {
+	ips := NewImageParts()
+	ip1 := NewImagePart("/word/media/image1.png", opc.CTPng, []byte("a"), nil)
+	ip2 := NewImagePart("/word/media/image2.png", opc.CTPng, []byte("b"), nil)
+	ips.Append(ip1)
+	ips.Append(ip2)
+
+	all := ips.All()
+	if len(all) != 2 {
+		t.Errorf("All() len = %d, want 2", len(all))
+	}
+	if all[0] != ip1 || all[1] != ip2 {
+		t.Error("All() should return parts in insertion order")
+	}
+}
+
+func TestImageParts_All_Empty(t *testing.T) {
+	ips := NewImageParts()
+	all := ips.All()
+	if len(all) != 0 {
+		t.Errorf("All() on empty = %d, want 0", len(all))
 	}
 }

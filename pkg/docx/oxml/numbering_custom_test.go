@@ -271,6 +271,110 @@ func TestCT_Numbering_AllAbstractNums(t *testing.T) {
 	}
 }
 
+func TestAddLvlOverrideWithIlvl(t *testing.T) {
+	t.Parallel()
+	numEl := OxmlElement("w:num")
+	numEl.CreateAttr("w:numId", "1")
+	num := &CT_Num{Element{e: numEl}}
+
+	lvl, err := num.AddLvlOverrideWithIlvl(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ilvl, err := lvl.Ilvl()
+	if err != nil {
+		t.Fatalf("Ilvl: %v", err)
+	}
+	if ilvl != 3 {
+		t.Errorf("ilvl = %d, want 3", ilvl)
+	}
+}
+
+func TestAddStartOverrideWithVal(t *testing.T) {
+	t.Parallel()
+	numLvlEl := OxmlElement("w:lvlOverride")
+	nl := &CT_NumLvl{Element{e: numLvlEl}}
+
+	so, err := nl.AddStartOverrideWithVal(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	val, err := so.Val()
+	if err != nil {
+		t.Fatalf("Val: %v", err)
+	}
+	if val != 5 {
+		t.Errorf("startOverride val = %d, want 5", val)
+	}
+}
+
+func TestNewDecimalNumber_InvalidTag(t *testing.T) {
+	t.Parallel()
+	_, err := NewDecimalNumber("bad", 1)
+	if err == nil {
+		t.Error("expected error for invalid tag")
+	}
+}
+
+func TestNewCtString_InvalidTag(t *testing.T) {
+	t.Parallel()
+	_, err := NewCtString("bad", "val")
+	if err == nil {
+		t.Error("expected error for invalid tag")
+	}
+}
+
+func TestSetNumIdVal(t *testing.T) {
+	t.Parallel()
+	npEl := OxmlElement("w:numPr")
+	np := &CT_NumPr{Element{e: npEl}}
+
+	// Initially nil
+	v, err := np.NumIdVal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != nil {
+		t.Error("expected nil")
+	}
+
+	if err := np.SetNumIdVal(5); err != nil {
+		t.Fatal(err)
+	}
+	got, err := np.NumIdVal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != 5 {
+		t.Errorf("NumIdVal() = %v, want 5", got)
+	}
+}
+
+func TestSetIlvlVal(t *testing.T) {
+	t.Parallel()
+	npEl := OxmlElement("w:numPr")
+	np := &CT_NumPr{Element{e: npEl}}
+
+	v, err := np.IlvlVal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != nil {
+		t.Error("expected nil")
+	}
+
+	if err := np.SetIlvlVal(2); err != nil {
+		t.Fatal(err)
+	}
+	got, err := np.IlvlVal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != 2 {
+		t.Errorf("IlvlVal() = %v, want 2", got)
+	}
+}
+
 func TestCT_Numbering_AllAbstractNums_Empty(t *testing.T) {
 	xml := `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
 		`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +

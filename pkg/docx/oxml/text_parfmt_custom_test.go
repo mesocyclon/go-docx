@@ -198,3 +198,191 @@ func TestCT_TabStops_InsertTabInOrder(t *testing.T) {
 		t.Errorf("tabs not in order: %d, %d, %d", pos0, pos1, pos2)
 	}
 }
+
+func newPPr() *CT_PPr {
+	return &CT_PPr{Element{e: OxmlElement("w:pPr")}}
+}
+
+func TestSpacingLine(t *testing.T) {
+	t.Parallel()
+	pPr := newPPr()
+
+	// nil when no spacing
+	v, err := pPr.SpacingLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != nil {
+		t.Error("expected nil when no spacing")
+	}
+
+	// Set and read back
+	val := 360
+	if err := pPr.SetSpacingLine(&val); err != nil {
+		t.Fatal(err)
+	}
+	got, err := pPr.SpacingLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != 360 {
+		t.Errorf("SpacingLine = %v, want 360", got)
+	}
+}
+
+func TestSpacingLineRule(t *testing.T) {
+	t.Parallel()
+	pPr := newPPr()
+
+	// nil when no spacing
+	lr, err := pPr.SpacingLineRule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr != nil {
+		t.Error("expected nil")
+	}
+
+	// Set line only → defaults to MULTIPLE
+	val := 240
+	if err := pPr.SetSpacingLine(&val); err != nil {
+		t.Fatal(err)
+	}
+	lr, err = pPr.SpacingLineRule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr == nil || *lr != enum.WdLineSpacingMultiple {
+		t.Errorf("SpacingLineRule with line but no rule = %v, want MULTIPLE", lr)
+	}
+
+	// Set explicit lineRule
+	rule := enum.WdLineSpacingExactly
+	if err := pPr.SetSpacingLineRule(&rule); err != nil {
+		t.Fatal(err)
+	}
+	lr, err = pPr.SpacingLineRule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr == nil || *lr != enum.WdLineSpacingExactly {
+		t.Errorf("SpacingLineRule = %v, want EXACTLY", lr)
+	}
+
+	// nil lineRule → removes
+	if err := pPr.SetSpacingLineRule(nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetSpacingLineRule_NilNoSpacing(t *testing.T) {
+	t.Parallel()
+	pPr := newPPr()
+	// Setting nil when no spacing element — should be no-op
+	if err := pPr.SetSpacingLineRule(nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIndRight(t *testing.T) {
+	t.Parallel()
+	pPr := newPPr()
+
+	v, err := pPr.IndRight()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != nil {
+		t.Error("expected nil")
+	}
+
+	val := 720
+	if err := pPr.SetIndRight(&val); err != nil {
+		t.Fatal(err)
+	}
+	got, err := pPr.IndRight()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != 720 {
+		t.Errorf("IndRight = %v, want 720", got)
+	}
+
+	// Clear
+	if err := pPr.SetIndRight(nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetIndRight_NilNoInd(t *testing.T) {
+	t.Parallel()
+	pPr := newPPr()
+	if err := pPr.SetIndRight(nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKeepNextVal(t *testing.T) {
+	t.Parallel()
+	pPr := newPPr()
+
+	if pPr.KeepNextVal() != nil {
+		t.Error("expected nil by default")
+	}
+
+	tr := true
+	if err := pPr.SetKeepNextVal(&tr); err != nil {
+		t.Fatal(err)
+	}
+	v := pPr.KeepNextVal()
+	if v == nil || !*v {
+		t.Error("expected true")
+	}
+
+	if err := pPr.SetKeepNextVal(nil); err != nil {
+		t.Fatal(err)
+	}
+	if pPr.KeepNextVal() != nil {
+		t.Error("expected nil after clearing")
+	}
+}
+
+func TestWidowControlVal(t *testing.T) {
+	t.Parallel()
+	pPr := newPPr()
+
+	if pPr.WidowControlVal() != nil {
+		t.Error("expected nil by default")
+	}
+
+	tr := true
+	if err := pPr.SetWidowControlVal(&tr); err != nil {
+		t.Fatal(err)
+	}
+	v := pPr.WidowControlVal()
+	if v == nil || !*v {
+		t.Error("expected true")
+	}
+
+	if err := pPr.SetWidowControlVal(nil); err != nil {
+		t.Fatal(err)
+	}
+	if pPr.WidowControlVal() != nil {
+		t.Error("expected nil after clearing")
+	}
+}
+
+func TestSetPageBreakBeforeVal_SetFalse(t *testing.T) {
+	t.Parallel()
+	pPr := newPPr()
+
+	f := false
+	if err := pPr.SetPageBreakBeforeVal(&f); err != nil {
+		t.Fatal(err)
+	}
+	// Should have element with val=false
+	v := pPr.PageBreakBeforeVal()
+	if v == nil || *v {
+		t.Error("expected false")
+	}
+}

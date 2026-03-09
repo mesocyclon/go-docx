@@ -2,6 +2,8 @@ package oxml
 
 import (
 	"testing"
+
+	"github.com/beevik/etree"
 )
 
 func TestCT_LastRenderedPageBreak_PrecedesAllContent(t *testing.T) {
@@ -283,5 +285,36 @@ func TestCT_LastRenderedPageBreak_FollowingFragment_MultiRun(t *testing.T) {
 	text := frag.ParagraphText()
 	if text != "CD" {
 		t.Errorf("FollowingFragmentP (multi-run): got %q, want %q", text, "CD")
+	}
+}
+
+func TestIsRunInnerContent(t *testing.T) {
+	t.Parallel()
+	// These are the tags recognized by isRunInnerContent
+	runContent := []string{"t", "br", "cr", "tab", "noBreakHyphen", "drawing", "ptab"}
+
+	for _, tag := range runContent {
+		e := etree.NewElement(tag)
+		e.Space = "w"
+		if !isRunInnerContent(e) {
+			t.Errorf("isRunInnerContent(%q) should be true", tag)
+		}
+	}
+
+	// Non-content elements
+	nonContent := []string{"rPr", "lastRenderedPageBreak", "fldChar", "instrText"}
+	for _, tag := range nonContent {
+		e := etree.NewElement(tag)
+		e.Space = "w"
+		if isRunInnerContent(e) {
+			t.Errorf("isRunInnerContent(%q) should be false", tag)
+		}
+	}
+
+	// Non-w namespace
+	foreign := etree.NewElement("t")
+	foreign.Space = "mc"
+	if isRunInnerContent(foreign) {
+		t.Error("isRunInnerContent(mc:t) should be false")
 	}
 }

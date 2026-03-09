@@ -375,3 +375,136 @@ func TestNewElement(t *testing.T) {
 		}
 	})
 }
+
+func TestWrapElement(t *testing.T) {
+	t.Parallel()
+	raw := etree.NewElement("p")
+	raw.Space = "w"
+	el := WrapElement(raw)
+	if el.RawElement() != raw {
+		t.Error("WrapElement should wrap the given etree element")
+	}
+}
+
+func TestElementXPath(t *testing.T) {
+	t.Parallel()
+	p := etree.NewElement("p")
+	p.Space = "w"
+	r := p.CreateElement("r")
+	r.Space = "w"
+	el := &Element{e: p}
+
+	results := el.XPath("r")
+	if len(results) != 1 {
+		t.Errorf("XPath(r) returned %d results, want 1", len(results))
+	}
+}
+
+func TestResolveAttrNameClarkNotation(t *testing.T) {
+	t.Parallel()
+
+	// Clark-notation attribute access via GetAttr/SetAttr
+	e := etree.NewElement("p")
+	e.Space = "w"
+	el := &Element{e: e}
+
+	// Set with Clark notation → should resolve to prefix form
+	el.SetAttr("w:val", "test")
+	val, ok := el.GetAttr("{"+NsWml+"}val")
+	if !ok || val != "test" {
+		t.Errorf("GetAttr with Clark notation = (%q, %v), want (test, true)", val, ok)
+	}
+}
+
+func TestResolveAttrNameUnknownClark(t *testing.T) {
+	t.Parallel()
+	e := etree.NewElement("p")
+	e.Space = "w"
+	e.CreateAttr("val", "hello")
+	el := &Element{e: e}
+
+	// Unknown Clark notation URI — should still resolve to local part
+	val, ok := el.GetAttr("{http://unknown.example.com}val")
+	if !ok || val != "hello" {
+		t.Errorf("GetAttr with unknown Clark = (%q, %v), want (hello, true)", val, ok)
+	}
+}
+
+func TestGetAttrNamespacedMismatch(t *testing.T) {
+	t.Parallel()
+	e := etree.NewElement("p")
+	e.Space = "w"
+	// Attr with specific namespace
+	e.CreateAttr("r:id", "rId1")
+	el := &Element{e: e}
+
+	// Request with different namespace — should not match
+	_, ok := el.GetAttr("w:id")
+	if ok {
+		t.Error("GetAttr should not match attr from different namespace")
+	}
+
+	// Request with correct namespace
+	val, ok := el.GetAttr("r:id")
+	if !ok || val != "rId1" {
+		t.Errorf("GetAttr(r:id) = (%q, %v), want (rId1, true)", val, ok)
+	}
+}
+
+func TestSetAttrWithNamespace(t *testing.T) {
+	t.Parallel()
+	e := etree.NewElement("p")
+	el := &Element{e: e}
+	el.SetAttr("w:val", "hello")
+	val, ok := el.GetAttr("w:val")
+	if !ok || val != "hello" {
+		t.Errorf("SetAttr(w:val) round-trip failed: (%q, %v)", val, ok)
+	}
+}
+
+func TestRemoveAttrWithNamespace(t *testing.T) {
+	t.Parallel()
+	e := etree.NewElement("p")
+	el := &Element{e: e}
+	el.SetAttr("w:val", "hello")
+	el.RemoveAttr("w:val")
+	_, ok := el.GetAttr("w:val")
+	if ok {
+		t.Error("RemoveAttr(w:val) should have removed the attribute")
+	}
+}
+
+func TestClarkFromEtreeNoSpace(t *testing.T) {
+	t.Parallel()
+	e := etree.NewElement("custom")
+	// No Space set — should just return tag
+	tag := clarkFromEtree(e)
+	if tag != "custom" {
+		t.Errorf("clarkFromEtree with no space = %q, want custom", tag)
+	}
+}
+
+func TestClarkFromEtreeUnknownSpace(t *testing.T) {
+	t.Parallel()
+	e := etree.NewElement("foo")
+	e.Space = "zzz" // not in nsmap
+	tag := clarkFromEtree(e)
+	// Should use Space as URI directly
+	if tag != "{zzz}foo" {
+		t.Errorf("clarkFromEtree with unknown space = %q, want {zzz}foo", tag)
+	}
+}
+
+func TestInsertBeforeRefNotFound(t *testing.T) {
+	t.Parallel()
+	parent := etree.NewElement("body")
+	newChild := etree.NewElement("p")
+	refChild := etree.NewElement("missing") // not in parent
+
+	insertBefore(parent, newChild, refChild)
+	// Should append
+	children := parent.ChildElements()
+	if len(children) != 1 || children[0] != newChild {
+		t.Error("insertBefore should append when refChild not found")
+	}
+}

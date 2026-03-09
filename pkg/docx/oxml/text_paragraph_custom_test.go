@@ -183,3 +183,39 @@ func TestCT_P_InnerContentElements(t *testing.T) {
 		t.Error("third element should be *CT_R")
 	}
 }
+
+func TestParagraphLastRenderedPageBreaks(t *testing.T) {
+	t.Parallel()
+	pEl := OxmlElement("w:p")
+	p := &CT_P{Element{e: pEl}}
+
+	// Add a run with a lastRenderedPageBreak
+	rEl := pEl.CreateElement("r")
+	rEl.Space = "w"
+	lrpb := rEl.CreateElement("lastRenderedPageBreak")
+	lrpb.Space = "w"
+
+	breaks := p.LastRenderedPageBreaks()
+	if len(breaks) != 1 {
+		t.Errorf("expected 1 break, got %d", len(breaks))
+	}
+}
+
+func TestParagraphLastRenderedPageBreaks_InHyperlink(t *testing.T) {
+	t.Parallel()
+	pEl := OxmlElement("w:p")
+	p := &CT_P{Element{e: pEl}}
+
+	// Add a hyperlink with a run containing lastRenderedPageBreak
+	hlEl := pEl.CreateElement("hyperlink")
+	hlEl.Space = "w"
+	rEl := hlEl.CreateElement("r")
+	rEl.Space = "w"
+	lrpb := rEl.CreateElement("lastRenderedPageBreak")
+	lrpb.Space = "w"
+
+	breaks := p.LastRenderedPageBreaks()
+	if len(breaks) != 1 {
+		t.Errorf("expected 1 break in hyperlink, got %d", len(breaks))
+	}
+}
