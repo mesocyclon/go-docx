@@ -2187,10 +2187,9 @@ func TestRWC_KeepSource_ForceRename_ChainRenamed(t *testing.T) {
 	}
 }
 
-func TestRWC_KeepDifferent_DifferentExpanded(t *testing.T) {
+func TestRWC_KeepDifferent_DifferentAlwaysCopied(t *testing.T) {
 	t.Parallel()
-	// KeepDifferentStyles WITHOUT ForceCopyStyles: different formatting
-	// should expand to direct attributes (same behavior as KeepSourceFormatting).
+	// KeepDifferentStyles: different formatting → always copy with suffix.
 	target := mustNewDoc(t)
 	target.AddParagraph("[<TAG>]")
 	tgtStyles, _ := target.part.Styles()
@@ -2210,18 +2209,29 @@ func TestRWC_KeepDifferent_DifferentExpanded(t *testing.T) {
 		`</w:style>`
 	srcEl, _ := oxml.ParseXml([]byte(srcXml))
 	srcStyles.RawElement().AddChild(srcEl)
-	rcInjectStyledParagraph(t, source, "DiffStyle", "expanded text")
+	rcInjectStyledParagraph(t, source, "DiffStyle", "copied text")
 
 	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
 		Source: source,
 		Format: KeepDifferentStyles,
-		// NO ForceCopyStyles — should expand
 	})
 	if err != nil {
 		t.Fatalf("ReplaceWithContent: %v", err)
 	}
 
-	// Verify jc=center expanded into direct attributes.
+	// DiffStyle_0 must be created in target styles.
+	tgtStyles, _ = target.part.Styles()
+	copied := tgtStyles.GetByID("DiffStyle_0")
+	if copied == nil {
+		t.Fatal("expected DiffStyle_0 in target styles")
+	}
+
+	// Copied style must have semiHidden marker.
+	if findChild(copied.RawElement(), "w", "semiHidden") == nil {
+		t.Error("expected semiHidden on DiffStyle_0")
+	}
+
+	// Paragraph must reference DiffStyle_0 (not default or original).
 	body, _ := target.getBody()
 	for _, child := range body.Element().ChildElements() {
 		if child.Space != "w" || child.Tag != "p" {
@@ -2231,12 +2241,606 @@ func TestRWC_KeepDifferent_DifferentExpanded(t *testing.T) {
 		if pPr == nil {
 			continue
 		}
-		jc := findChild(pPr, "w", "jc")
-		if jc != nil && jc.SelectAttrValue("w:val", "") == "center" {
-			return // OK — expanded
+		ps := findChild(pPr, "w", "pStyle")
+		if ps != nil && ps.SelectAttrValue("w:val", "") == "DiffStyle_0" {
+			// jc must NOT be injected as direct attr.
+			jc := findChild(pPr, "w", "jc")
+			if jc != nil {
+				t.Error("jc should not be injected as direct attribute when style is copied")
+			}
+			return
 		}
 	}
-	t.Error("expected jc=center expanded from source style (KeepDifferentStyles, no ForceCopy)")
+	t.Error("expected paragraph referencing DiffStyle_0")
+}
+
+func TestRWC_KeepDifferent_SameReusesTarget(t *testing.T) {
+	t.Parallel()
+	// Same formatting in src and tgt → no copy, paragraph uses target styleId.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	xml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="SameStyle">` +
+		`<w:name w:val="Same Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	el, _ := oxml.ParseXml([]byte(xml))
+	tgtStyles.RawElement().AddChild(el)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="SameStyle">` +
+		`<w:name w:val="Same Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	rcInjectStyledParagraph(t, source, "SameStyle", "same style text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// SameStyle_0 must NOT exist.
+	tgtStyles, _ = target.part.Styles()
+	if tgtStyles.GetByID("SameStyle_0") != nil {
+		t.Error("SameStyle_0 should not exist — styles are identical")
+	}
+
+	// Paragraph must reference "SameStyle" (original target ID).
+	body, _ := target.getBody()
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		ps := findChild(pPr, "w", "pStyle")
+		if ps != nil && ps.SelectAttrValue("w:val", "") == "SameStyle" {
+			return
+		}
+	}
+	t.Error("expected paragraph referencing SameStyle (target ID)")
+}
+
+func TestRWC_KeepDifferent_MissingCopiedAsIs(t *testing.T) {
+	t.Parallel()
+	// Style absent in target → copied under original ID (no suffix).
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="UniqueStyle">` +
+		`<w:name w:val="Unique Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	rcInjectStyledParagraph(t, source, "UniqueStyle", "unique text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// UniqueStyle must exist in target under original ID.
+	tgtStyles, _ := target.part.Styles()
+	if tgtStyles.GetByID("UniqueStyle") == nil {
+		t.Error("expected UniqueStyle copied as-is to target")
+	}
+	// No suffixed version.
+	if tgtStyles.GetByID("UniqueStyle_0") != nil {
+		t.Error("UniqueStyle_0 should not exist — no conflict")
+	}
+}
+
+func TestRWC_KeepDifferent_ForceCopyIgnored(t *testing.T) {
+	t.Parallel()
+	// ForceCopyStyles=true + different styles → result identical to false.
+	makeDoc := func(forceCopy bool) *Document {
+		target := mustNewDoc(t)
+		target.AddParagraph("[<TAG>]")
+		tgtStyles, _ := target.part.Styles()
+		tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="FCSty">` +
+			`<w:name w:val="FC Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`
+		tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+		tgtStyles.RawElement().AddChild(tgtEl)
+
+		source := mustNewDoc(t)
+		srcStyles, _ := source.part.Styles()
+		srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="FCSty">` +
+			`<w:name w:val="FC Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`</w:style>`
+		srcEl, _ := oxml.ParseXml([]byte(srcXml))
+		srcStyles.RawElement().AddChild(srcEl)
+		rcInjectStyledParagraph(t, source, "FCSty", "fc text")
+
+		_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+			Source:  source,
+			Format:  KeepDifferentStyles,
+			Options: ImportFormatOptions{ForceCopyStyles: forceCopy},
+		})
+		if err != nil {
+			t.Fatalf("ReplaceWithContent(force=%v): %v", forceCopy, err)
+		}
+		return target
+	}
+
+	docFalse := makeDoc(false)
+	docTrue := makeDoc(true)
+
+	// Both must have FCSty_0.
+	s1, _ := docFalse.part.Styles()
+	s2, _ := docTrue.part.Styles()
+	if s1.GetByID("FCSty_0") == nil {
+		t.Error("ForceCopyStyles=false: expected FCSty_0")
+	}
+	if s2.GetByID("FCSty_0") == nil {
+		t.Error("ForceCopyStyles=true: expected FCSty_0")
+	}
+}
+
+func TestRWC_KeepDifferent_ChainBothDifferent(t *testing.T) {
+	t.Parallel()
+	// Child basedOn Parent, both different → both copied with suffix,
+	// basedOn in Child_0 remapped to Parent_0.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="ParStyle">` +
+			`<w:name w:val="Par Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="ChiStyle">` +
+			`<w:name w:val="Chi Style"/><w:basedOn w:val="ParStyle"/>` +
+			`<w:rPr><w:i/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		tgtStyles.RawElement().AddChild(el)
+	}
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="ParStyle">` +
+			`<w:name w:val="Par Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="ChiStyle">` +
+			`<w:name w:val="Chi Style"/><w:basedOn w:val="ParStyle"/>` +
+			`<w:rPr><w:b/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		srcStyles.RawElement().AddChild(el)
+	}
+	rcInjectStyledParagraph(t, source, "ChiStyle", "chain text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	tgtStyles, _ = target.part.Styles()
+	if tgtStyles.GetByID("ParStyle_0") == nil {
+		t.Error("expected ParStyle_0 in target")
+	}
+	if tgtStyles.GetByID("ChiStyle_0") == nil {
+		t.Error("expected ChiStyle_0 in target")
+	}
+
+	// Verify basedOn in ChiStyle_0 points to ParStyle_0.
+	chi0 := tgtStyles.GetByID("ChiStyle_0")
+	if chi0 != nil {
+		bo := findChild(chi0.RawElement(), "w", "basedOn")
+		if bo == nil {
+			t.Error("ChiStyle_0 missing basedOn")
+		} else if bo.SelectAttrValue("w:val", "") != "ParStyle_0" {
+			t.Errorf("ChiStyle_0 basedOn = %q, want ParStyle_0",
+				bo.SelectAttrValue("w:val", ""))
+		}
+	}
+}
+
+func TestRWC_KeepDifferent_ChainParentInTarget(t *testing.T) {
+	t.Parallel()
+	// Style different, basedOn points to target style (identical) →
+	// style copied with suffix, basedOn points to original target style.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	for _, s := range []string{
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="BaseOk">` +
+			`<w:name w:val="Base Ok"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`,
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="ChildDiff">` +
+			`<w:name w:val="Child Diff"/><w:basedOn w:val="BaseOk"/>` +
+			`<w:rPr><w:i/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		tgtStyles.RawElement().AddChild(el)
+	}
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	for _, s := range []string{
+		// Same BaseOk in source (identical to target).
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="BaseOk">` +
+			`<w:name w:val="Base Ok"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`,
+		// Different ChildDiff.
+		`<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="ChildDiff">` +
+			`<w:name w:val="Child Diff"/><w:basedOn w:val="BaseOk"/>` +
+			`<w:rPr><w:b/></w:rPr>` +
+			`</w:style>`,
+	} {
+		el, _ := oxml.ParseXml([]byte(s))
+		srcStyles.RawElement().AddChild(el)
+	}
+	rcInjectStyledParagraph(t, source, "ChildDiff", "child diff text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	tgtStyles, _ = target.part.Styles()
+	// BaseOk should NOT be copied (same formatting).
+	if tgtStyles.GetByID("BaseOk_0") != nil {
+		t.Error("BaseOk_0 should not exist — parent is identical")
+	}
+	// ChildDiff should be copied.
+	child0 := tgtStyles.GetByID("ChildDiff_0")
+	if child0 == nil {
+		t.Fatal("expected ChildDiff_0 in target")
+	}
+	// basedOn should point to original BaseOk.
+	bo := findChild(child0.RawElement(), "w", "basedOn")
+	if bo == nil {
+		t.Error("ChildDiff_0 missing basedOn")
+	} else if bo.SelectAttrValue("w:val", "") != "BaseOk" {
+		t.Errorf("ChildDiff_0 basedOn = %q, want BaseOk",
+			bo.SelectAttrValue("w:val", ""))
+	}
+}
+
+func TestRWC_KeepDifferent_CharacterStyle(t *testing.T) {
+	t.Parallel()
+	// Different character style → copied with suffix, rPr preserved.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="character" w:styleId="CharSty">` +
+		`<w:name w:val="Char Style"/><w:rPr><w:i/></w:rPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="character" w:styleId="CharSty">` +
+		`<w:name w:val="Char Style"/><w:rPr><w:b/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+
+	// Inject a paragraph with a run referencing CharSty.
+	srcBody := source.element.Body().RawElement()
+	pEl, _ := oxml.ParseXml([]byte(
+		`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:r><w:rPr><w:rStyle w:val="CharSty"/></w:rPr><w:t>char test</w:t></w:r></w:p>`,
+	))
+	rcInsertBeforeSectPr(srcBody, pEl)
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	tgtStyles, _ = target.part.Styles()
+	copied := tgtStyles.GetByID("CharSty_0")
+	if copied == nil {
+		t.Fatal("expected CharSty_0 in target")
+	}
+	// Verify rPr with bold preserved.
+	rPr := findChild(copied.RawElement(), "w", "rPr")
+	if rPr == nil {
+		t.Error("expected rPr on copied character style")
+	} else if findChild(rPr, "w", "b") == nil {
+		t.Error("expected bold in copied character style rPr")
+	}
+}
+
+func TestRWC_KeepDifferent_MultipleDifferent(t *testing.T) {
+	t.Parallel()
+	// Three styles with different formatting → suffixes _0, _1, _2.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+
+	for _, name := range []string{"StyleA", "StyleB", "StyleC"} {
+		// Target versions: jc=left.
+		tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="` + name + `">` +
+			`<w:name w:val="` + name + `"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+			`</w:style>`
+		tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+		tgtStyles.RawElement().AddChild(tgtEl)
+
+		// Source versions: jc=center.
+		srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:type="paragraph" w:styleId="` + name + `">` +
+			`<w:name w:val="` + name + `"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+			`</w:style>`
+		srcEl, _ := oxml.ParseXml([]byte(srcXml))
+		srcStyles.RawElement().AddChild(srcEl)
+	}
+	// Add paragraphs referencing all three.
+	for _, name := range []string{"StyleA", "StyleB", "StyleC"} {
+		rcInjectStyledParagraph(t, source, name, name+" text")
+	}
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	tgtStyles, _ = target.part.Styles()
+	for _, name := range []string{"StyleA_0", "StyleB_0", "StyleC_0"} {
+		if tgtStyles.GetByID(name) == nil {
+			t.Errorf("expected %s in target styles", name)
+		}
+	}
+}
+
+func TestRWC_KeepDifferent_RootStyleCompensateAll(t *testing.T) {
+	t.Parallel()
+	// Root style (no basedOn), different formatting, src/tgt docDefaults
+	// differ (src sz=24, tgt sz=20) → copy with suffix + compensateAll
+	// delta injected into pPr/rPr.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	// Set target docDefaults: sz=20.
+	ddXml := `<w:docDefaults xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:rPrDefault><w:rPr><w:sz w:val="20"/></w:rPr></w:rPrDefault>` +
+		`</w:docDefaults>`
+	ddEl, _ := oxml.ParseXml([]byte(ddXml))
+	tgtStyles.RawElement().InsertChildAt(0, ddEl)
+	// Target style: no own rPr.
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="RootSty">` +
+		`<w:name w:val="Root Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	// Source docDefaults: sz=24.
+	srcDdXml := `<w:docDefaults xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault>` +
+		`</w:docDefaults>`
+	srcDdEl, _ := oxml.ParseXml([]byte(srcDdXml))
+	srcStyles.RawElement().InsertChildAt(0, srcDdEl)
+	// Source style: different pPr (jc=center), no basedOn.
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="RootSty">` +
+		`<w:name w:val="Root Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	rcInjectStyledParagraph(t, source, "RootSty", "root compensate text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	tgtStyles, _ = target.part.Styles()
+	copied := tgtStyles.GetByID("RootSty_0")
+	if copied == nil {
+		t.Fatal("expected RootSty_0 in target")
+	}
+	// Verify compensateAll: delta sz=24 injected into rPr.
+	rPr := findChild(copied.RawElement(), "w", "rPr")
+	if rPr == nil {
+		t.Fatal("expected rPr with docDefaults compensation on RootSty_0")
+	}
+	szEl := findChild(rPr, "w", "sz")
+	if szEl == nil {
+		t.Fatal("expected sz element in RootSty_0 rPr (docDefaults delta)")
+	}
+	if v := szEl.SelectAttrValue("w:val", ""); v != "24" {
+		t.Errorf("sz val = %q, want 24 (source docDefaults compensation)", v)
+	}
+}
+
+func TestRWC_KeepDifferent_DocDefaultsCompensation(t *testing.T) {
+	t.Parallel()
+	// Different style + src/tgt docDefaults differ → copy with suffix
+	// + Pass 2 fixupCopiedStyles applies compensation. Verify rPr sz delta.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	ddXml := `<w:docDefaults xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:rPrDefault><w:rPr><w:sz w:val="20"/></w:rPr></w:rPrDefault>` +
+		`<w:pPrDefault><w:pPr><w:spacing w:after="0"/></w:pPr></w:pPrDefault>` +
+		`</w:docDefaults>`
+	ddEl, _ := oxml.ParseXml([]byte(ddXml))
+	tgtStyles.RawElement().InsertChildAt(0, ddEl)
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="DDSty">` +
+		`<w:name w:val="DD Style"/><w:rPr><w:i/></w:rPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcDdXml := `<w:docDefaults xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault>` +
+		`<w:pPrDefault><w:pPr><w:spacing w:after="160"/></w:pPr></w:pPrDefault>` +
+		`</w:docDefaults>`
+	srcDdEl, _ := oxml.ParseXml([]byte(srcDdXml))
+	srcStyles.RawElement().InsertChildAt(0, srcDdEl)
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="DDSty">` +
+		`<w:name w:val="DD Style"/><w:rPr><w:b/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	rcInjectStyledParagraph(t, source, "DDSty", "docdefaults text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	tgtStyles, _ = target.part.Styles()
+	copied := tgtStyles.GetByID("DDSty_0")
+	if copied == nil {
+		t.Fatal("expected DDSty_0 in target")
+	}
+	// rPr should contain sz delta (24) and original bold.
+	rPr := findChild(copied.RawElement(), "w", "rPr")
+	if rPr == nil {
+		t.Fatal("expected rPr on DDSty_0")
+	}
+	szEl := findChild(rPr, "w", "sz")
+	if szEl == nil {
+		t.Fatal("expected sz in DDSty_0 rPr (docDefaults compensation)")
+	}
+	if v := szEl.SelectAttrValue("w:val", ""); v != "24" {
+		t.Errorf("sz val = %q, want 24", v)
+	}
+	if findChild(rPr, "w", "b") == nil {
+		t.Error("expected bold preserved in DDSty_0 rPr")
+	}
+	// pPr should contain spacing delta.
+	pPr := findChild(copied.RawElement(), "w", "pPr")
+	if pPr != nil {
+		sp := findChild(pPr, "w", "spacing")
+		if sp != nil {
+			if v := sp.SelectAttrValue("w:after", ""); v != "160" {
+				t.Errorf("spacing after = %q, want 160", v)
+			}
+		}
+	}
+}
+
+func TestRWC_KeepDifferent_RoundTrip(t *testing.T) {
+	t.Parallel()
+	// Full round-trip: insert + Save + reopen + verify.
+	target := mustNewDoc(t)
+	target.AddParagraph("[<TAG>]")
+	tgtStyles, _ := target.part.Styles()
+	tgtXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="RTStyle">` +
+		`<w:name w:val="RT Style"/><w:pPr><w:jc w:val="left"/></w:pPr>` +
+		`</w:style>`
+	tgtEl, _ := oxml.ParseXml([]byte(tgtXml))
+	tgtStyles.RawElement().AddChild(tgtEl)
+
+	source := mustNewDoc(t)
+	srcStyles, _ := source.part.Styles()
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="RTStyle">` +
+		`<w:name w:val="RT Style"/><w:pPr><w:jc w:val="center"/></w:pPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyles.RawElement().AddChild(srcEl)
+	rcInjectStyledParagraph(t, source, "RTStyle", "round trip text")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Format: KeepDifferentStyles,
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Save and reopen.
+	var buf bytes.Buffer
+	if err := target.Save(&buf); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	reopened, err := Open(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Verify copied style survived round-trip.
+	reStyles, _ := reopened.part.Styles()
+	if reStyles.GetByID("RTStyle_0") == nil {
+		t.Error("expected RTStyle_0 after round-trip")
+	}
+
+	// Verify paragraph references.
+	body, _ := reopened.getBody()
+	found := false
+	for _, child := range body.Element().ChildElements() {
+		if child.Space != "w" || child.Tag != "p" {
+			continue
+		}
+		pPr := findChild(child, "w", "pPr")
+		if pPr == nil {
+			continue
+		}
+		ps := findChild(pPr, "w", "pStyle")
+		if ps != nil && ps.SelectAttrValue("w:val", "") == "RTStyle_0" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected paragraph referencing RTStyle_0 after round-trip")
+	}
 }
 
 func TestRWC_BackwardCompat_ZeroValue(t *testing.T) {

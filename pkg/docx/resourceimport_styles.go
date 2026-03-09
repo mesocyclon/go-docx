@@ -263,12 +263,10 @@ func (ri *ResourceImporter) mergeOneStyle(srcStyle *oxml.CT_Style) error {
 			// Same formatting → use target (like UseDestinationStyles).
 			ri.styleMap[id] = targetId
 		} else {
-			// Different formatting → behave like KeepSourceFormatting.
-			if ri.opts.ForceCopyStyles {
-				return ri.copyStyleToTarget(srcStyle, ri.uniqueStyleId(id))
-			}
-			ri.expandStyles[id] = srcStyle
-			ri.styleMap[id] = ri.targetDefaultParaStyleId()
+			// Aspose.Words KeepDifferentStyles: different formatting →
+			// always copy with unique suffix. ForceCopyStyles is irrelevant
+			// for this mode (it's a KeepSourceFormatting-only option).
+			return ri.copyStyleToTarget(srcStyle, ri.uniqueStyleId(id))
 		}
 	}
 	return nil
@@ -803,24 +801,13 @@ func (ri *ResourceImporter) resolveStyleChainRaw(style *oxml.CT_Style) (pPr, rPr
 	return ri.resolveStyleChainOpt(style, false)
 }
 
-// resolveStyleChainOpt is the core chain resolver. When includeDocDefaults
-// is true, source docDefaults are used as the chain base (Fix A for expand
-// path). When false, only style definitions are merged (for compensation
-// chain coverage check).
+// walkStyleChain walks the basedOn chain starting from style, resolving
+// properties through the given styles part. Returns merged pPr and rPr
+// (derived overrides base). Does NOT include docDefaults — that's the
+// caller's responsibility. Does NOT strip pStyle/rStyle — caller decides.
 //
-// The chain is built root-first [style, parent, grandparent, ...] then
-// merged in reverse order so that derived style properties override
-// inherited ones.
-//
-// Cycle protection via visited set prevents infinite loops on malformed
-// style definitions.
-func (ri *ResourceImporter) resolveStyleChainOpt(style *oxml.CT_Style, includeDocDefaults bool) (pPr, rPr *etree.Element) {
-	srcStyles, err := ri.sourceStyles()
-	if err != nil {
-		return nil, nil
-	}
-
-	// Build chain: [style, parent, grandparent, ...]
+// Cycle-safe via visited set.
+func walkStyleChain(style *oxml.CT_Style, styles *oxml.CT_Styles) (pPr, rPr *etree.Element) {
 	var chain []*oxml.CT_Style
 	visited := map[string]bool{}
 	current := style
@@ -836,22 +823,7 @@ func (ri *ResourceImporter) resolveStyleChainOpt(style *oxml.CT_Style, includeDo
 		if basedOn == "" {
 			break
 		}
-		current = srcStyles.GetByID(basedOn)
-	}
-
-	// Optionally start with source docDefaults as the base of the chain.
-	// Fix A: for the expand path, this ensures properties inherited from
-	// source docDefaults are included in the resolved result.
-	// For compensation chain checks, docDefaults are excluded so that
-	// properties only from docDefaults are not incorrectly considered
-	// "covered by the chain".
-	if includeDocDefaults {
-		if ri.srcDocDefaultsPPr != nil {
-			pPr = ri.srcDocDefaultsPPr.Copy()
-		}
-		if ri.srcDocDefaultsRPr != nil {
-			rPr = ri.srcDocDefaultsRPr.Copy()
-		}
+		current = styles.GetByID(basedOn)
 	}
 
 	// Merge from base to derived (so derived overrides base).
@@ -870,6 +842,38 @@ func (ri *ResourceImporter) resolveStyleChainOpt(style *oxml.CT_Style, includeDo
 			} else {
 				overridePropertiesDeep(rPr, r)
 			}
+		}
+	}
+	return
+}
+
+// resolveStyleChainOpt is the core chain resolver. When includeDocDefaults
+// is true, source docDefaults are used as the chain base (Fix A for expand
+// path). When false, only style definitions are merged (for compensation
+// chain coverage check).
+func (ri *ResourceImporter) resolveStyleChainOpt(style *oxml.CT_Style, includeDocDefaults bool) (pPr, rPr *etree.Element) {
+	srcStyles, err := ri.sourceStyles()
+	if err != nil {
+		return nil, nil
+	}
+
+	pPr, rPr = walkStyleChain(style, srcStyles)
+
+	// Optionally prepend source docDefaults as base (Fix A).
+	if includeDocDefaults {
+		if ri.srcDocDefaultsPPr != nil {
+			base := ri.srcDocDefaultsPPr.Copy()
+			if pPr != nil {
+				overridePropertiesDeep(base, pPr)
+			}
+			pPr = base
+		}
+		if ri.srcDocDefaultsRPr != nil {
+			base := ri.srcDocDefaultsRPr.Copy()
+			if rPr != nil {
+				overridePropertiesDeep(base, rPr)
+			}
+			rPr = base
 		}
 	}
 

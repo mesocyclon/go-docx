@@ -54,8 +54,9 @@ const (
 	// KeepDifferentStyles is a hybrid strategy. For each conflicting style:
 	//   - If source and target definitions have identical formatting → uses
 	//     the destination style (like UseDestinationStyles).
-	//   - If formatting differs → behaves like KeepSourceFormatting (expands
-	//     to direct attributes, or copies with suffix if ForceCopyStyles).
+	//   - If formatting differs → always copies the source style with a
+	//     unique suffix (_0, _1, ...). ForceCopyStyles is irrelevant for
+	//     this mode (it's a KeepSourceFormatting-only option).
 	KeepDifferentStyles
 )
 
@@ -67,8 +68,9 @@ const (
 type ImportFormatOptions struct {
 	// ForceCopyStyles forces conflicting styles to be copied into the target
 	// with a unique suffix (_0, _1, ...) instead of expanding formatting
-	// into direct attributes. Only effective with KeepSourceFormatting and
-	// KeepDifferentStyles modes.
+	// into direct attributes. Only effective with KeepSourceFormatting mode.
+	// For KeepDifferentStyles this option is irrelevant — copying on
+	// conflict is always performed automatically.
 	//
 	// Mirrors Aspose.Words ImportFormatOptions.ForceCopyStyles.
 	ForceCopyStyles bool
