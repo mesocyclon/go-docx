@@ -576,6 +576,15 @@ func prepareContentElements(
 	// references (e.g. headerReference in sectPr) are not imported.
 	sanitizeForInsertion(elements)
 
+	// Step 2b2: Renumber bookmark IDs and deduplicate names.
+	// Bookmark w:id must be unique per document (paired start/end share
+	// the same id). Bookmark w:name must also be unique — Word silently
+	// discards duplicates. Uses document-level counter to guarantee
+	// uniqueness across body, headers, footers, and comments.
+	if ri.targetDoc != nil {
+		renumberBookmarks(elements, ri.targetDoc.part)
+	}
+
 	// Step 2c: Materialize implicit default styles.
 	// If source and target have different default paragraph styles,
 	// paragraphs without explicit pStyle get the source default added
@@ -647,25 +656,24 @@ func prepareContentElements(
 //
 //   - Comment markers reference entries in the source's comments.xml,
 //     which do not exist in the target.
-//   - Bookmark, move-tracking, custom-XML-change, and permission markers
-//     all use w:id that must be unique per document. Duplicating them
-//     when the same source is inserted multiple times (or into a document
-//     that already has overlapping IDs) produces invalid OOXML that Word
+//   - Move-tracking, custom-XML-change, and permission markers all use
+//     w:id that must be unique per document. Duplicating them when the
+//     same source is inserted multiple times (or into a document that
+//     already has overlapping IDs) produces invalid OOXML that Word
 //     flags as corrupt.
 //
-// Renumbering these paired start/end markers correctly is complex (need
-// to match pairs, update cross-references). Since annotations from the
-// source have no semantic meaning in the target, stripping is the correct
-// behavior for a content insertion API.
+// Bookmark markers (bookmarkStart/bookmarkEnd) are NOT in this set —
+// they are preserved and renumbered by renumberBookmarks() to support
+// cross-references and named anchors in the imported content.
 var annotationMarkers = map[string]bool{
 	// Comment markers (reference comments.xml)
 	"commentRangeStart": true,
 	"commentRangeEnd":   true,
 	"commentReference":  true,
 
-	// Bookmark markers
-	"bookmarkStart": true,
-	"bookmarkEnd":   true,
+	// Bookmark markers — PRESERVED (not stripped).
+	// bookmarkStart/bookmarkEnd are kept and renumbered by
+	// renumberBookmarks() for cross-reference and named anchor support.
 
 	// Move tracking (revision markup)
 	"moveFromRangeStart": true,
@@ -701,10 +709,11 @@ var annotationMarkers = map[string]bool{
 //     would inject false section breaks and import structural parts as
 //     generic BaseParts, corrupting the target.
 //
-//  2. Annotation range markers — 17 element types (comments, bookmarks,
-//     move tracking, custom XML changes, permissions) that carry
+//  2. Annotation range markers — 15 element types (comments, move
+//     tracking, custom XML changes, permissions) that carry
 //     document-scoped w:id values. These reference external state
-//     (comments.xml) or must be unique per document.
+//     (comments.xml) or must be unique per document. Bookmark markers
+//     are excluded — they are preserved and renumbered separately.
 func sanitizeForInsertion(elements []*etree.Element) {
 	for _, root := range elements {
 		stack := []*etree.Element{root}

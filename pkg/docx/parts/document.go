@@ -2,6 +2,7 @@ package parts
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/beevik/etree"
 	"github.com/vortex/go-docx/pkg/docx/enum"
@@ -22,6 +23,11 @@ type DocumentPart struct {
 	// lazyproperty) in Python — they re-check the relationship each call.
 	// The relationship graph itself acts as the cache.
 	numberingPart *NumberingPart
+
+	// Bookmark ID counter — unique per document (not per story part).
+	lastBookmarkID      int
+	bookmarkIDScanned   bool
+	bookmarkNameCounter int // monotonic suffix counter for name dedup
 }
 
 // NewDocumentPart creates a DocumentPart wrapping the given XmlPart.
@@ -50,6 +56,101 @@ func (dp *DocumentPart) Body() (*oxml.CT_Body, error) {
 		return nil, fmt.Errorf("parts: document has no body element")
 	}
 	return body, nil
+}
+
+// --------------------------------------------------------------------------
+// Bookmark ID allocation
+// --------------------------------------------------------------------------
+
+// NextBookmarkID returns a fresh document-unique bookmark ID.
+// On the first call it scans ALL story parts (body, headers, footers,
+// comments) for the maximum existing w:id on bookmarkStart/bookmarkEnd
+// elements. Subsequent calls increment the cached counter.
+func (dp *DocumentPart) NextBookmarkID() int {
+	if !dp.bookmarkIDScanned {
+		dp.lastBookmarkID = dp.scanMaxBookmarkID()
+		dp.bookmarkIDScanned = true
+	}
+	dp.lastBookmarkID++
+	return dp.lastBookmarkID
+}
+
+// NextBookmarkNameSuffix returns a monotonically increasing suffix number
+// for bookmark name deduplication (e.g. "_imp1", "_imp2"). Document-scoped
+// to guarantee uniqueness across multiple renumberBookmarks calls.
+func (dp *DocumentPart) NextBookmarkNameSuffix() int {
+	dp.bookmarkNameCounter++
+	return dp.bookmarkNameCounter
+}
+
+// scanMaxBookmarkID finds the maximum w:id value on bookmarkStart and
+// bookmarkEnd elements across all story parts of this document.
+func (dp *DocumentPart) scanMaxBookmarkID() int {
+	maxID := 0
+
+	// 1. Main document body.
+	if el := dp.Element(); el != nil {
+		if v := collectMaxBookmarkID(el); v > maxID {
+			maxID = v
+		}
+	}
+
+	// 2. All headers.
+	for _, rel := range dp.Rels().AllByRelType(opc.RTHeader) {
+		if hp, ok := rel.TargetPart.(*HeaderPart); ok {
+			if el := hp.Element(); el != nil {
+				if v := collectMaxBookmarkID(el); v > maxID {
+					maxID = v
+				}
+			}
+		}
+	}
+
+	// 3. All footers.
+	for _, rel := range dp.Rels().AllByRelType(opc.RTFooter) {
+		if fp, ok := rel.TargetPart.(*FooterPart); ok {
+			if el := fp.Element(); el != nil {
+				if v := collectMaxBookmarkID(el); v > maxID {
+					maxID = v
+				}
+			}
+		}
+	}
+
+	// 4. Comments.
+	rel, err := dp.Rels().GetByRelType(opc.RTComments)
+	if err == nil && rel.TargetPart != nil {
+		if cp, ok := rel.TargetPart.(*CommentsPart); ok {
+			if el := cp.Element(); el != nil {
+				if v := collectMaxBookmarkID(el); v > maxID {
+					maxID = v
+				}
+			}
+		}
+	}
+
+	return maxID
+}
+
+// collectMaxBookmarkID scans an element tree for the maximum w:id value
+// on bookmarkStart and bookmarkEnd elements.
+func collectMaxBookmarkID(root *etree.Element) int {
+	maxID := 0
+	stack := []*etree.Element{root}
+	for len(stack) > 0 {
+		el := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if el.Space == "w" && (el.Tag == "bookmarkStart" || el.Tag == "bookmarkEnd") {
+			v := el.SelectAttrValue("w:id", "")
+			if v != "" {
+				if id, err := strconv.Atoi(v); err == nil && id > maxID {
+					maxID = id
+				}
+			}
+		}
+		stack = append(stack, el.ChildElements()...)
+	}
+	return maxID
 }
 
 // --------------------------------------------------------------------------

@@ -131,9 +131,15 @@ func (ri *ResourceImporter) importNoteEntries(
 
 		bodyEls := noteBodyElements(clone)
 
-		// d. Sanitize: strip annotation markers (bookmarks, comment refs,
-		// move tracking) that carry source-scoped w:id values.
+		// d. Sanitize: strip annotation markers (comment refs, move
+		// tracking) that carry source-scoped w:id values. Bookmarks are
+		// preserved and renumbered below.
 		sanitizeForInsertion(bodyEls)
+
+		// d2. Renumber bookmark IDs for document-wide uniqueness.
+		if ri.targetDoc != nil {
+			renumberBookmarks(bodyEls, ri.targetDoc.part)
+		}
 
 		// e. Import styles (delta — picks up FootnoteText etc. not in body).
 		if err := ri.importStylesForElements(bodyEls); err != nil {

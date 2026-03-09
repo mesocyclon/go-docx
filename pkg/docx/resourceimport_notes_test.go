@@ -353,10 +353,10 @@ func TestRemapAll_CombinedAllResourceTypes(t *testing.T) {
 // Regression: note body pipeline must sanitize annotations (bug #1)
 // --------------------------------------------------------------------------
 
-func TestNoteBodyPipeline_SanitizesAnnotations(t *testing.T) {
+func TestNoteBodyPipeline_PreservesBookmarks(t *testing.T) {
 	t.Parallel()
-	// Footnote body containing bookmarkStart/End — these carry source-scoped
-	// w:id values and must be stripped, same as for body content.
+	// Footnote body containing bookmarkStart/End — these are preserved
+	// by sanitize and renumbered separately by renumberBookmarks.
 	xml := `<w:footnote xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:id="1">` +
 		`<w:p>` +
 		`<w:bookmarkStart w:id="0" w:name="test"/>` +
@@ -369,11 +369,11 @@ func TestNoteBodyPipeline_SanitizesAnnotations(t *testing.T) {
 
 	sanitizeForInsertion(bodyEls)
 
-	if findDescendant(el, "w", "bookmarkStart") != nil {
-		t.Error("bookmarkStart should have been stripped from footnote body")
+	if findDescendant(el, "w", "bookmarkStart") == nil {
+		t.Error("bookmarkStart should be preserved in footnote body")
 	}
-	if findDescendant(el, "w", "bookmarkEnd") != nil {
-		t.Error("bookmarkEnd should have been stripped from footnote body")
+	if findDescendant(el, "w", "bookmarkEnd") == nil {
+		t.Error("bookmarkEnd should be preserved in footnote body")
 	}
 	if el.FindElement(".//w:t") == nil {
 		t.Error("run text should have been preserved")

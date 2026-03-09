@@ -1,6 +1,7 @@
 package docx
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -895,16 +896,18 @@ func TestSanitize_RemovesCommentMarkers(t *testing.T) {
 	}
 }
 
-func TestSanitize_RemovesBookmarkMarkers(t *testing.T) {
+func TestSanitize_BookmarksPreserved(t *testing.T) {
+	// bookmarkStart/bookmarkEnd are no longer stripped by sanitize —
+	// they are preserved and renumbered by renumberBookmarks().
 	el := makeElement(t, `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:bookmarkStart w:id="1" w:name="bm1"/><w:r><w:t>text</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>`)
 
 	sanitizeForInsertion([]*etree.Element{el})
 
-	if findDescendant(el, "w", "bookmarkStart") != nil {
-		t.Error("bookmarkStart should have been removed")
+	if findDescendant(el, "w", "bookmarkStart") == nil {
+		t.Error("bookmarkStart should be preserved")
 	}
-	if findDescendant(el, "w", "bookmarkEnd") != nil {
-		t.Error("bookmarkEnd should have been removed")
+	if findDescendant(el, "w", "bookmarkEnd") == nil {
+		t.Error("bookmarkEnd should be preserved")
 	}
 	if el.FindElement(".//w:t") == nil {
 		t.Error("run text should have been preserved")
@@ -925,7 +928,8 @@ func TestSanitize_PreservesNonAnnotationElements(t *testing.T) {
 }
 
 func TestSanitize_CombinedMarkup(t *testing.T) {
-	// Paragraph with BOTH sectPr in pPr AND comment markers — all removed in one pass.
+	// Paragraph with sectPr in pPr, comment markers, AND bookmark markers.
+	// sectPr and comments are removed; bookmarks are preserved.
 	el := makeElement(t, `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rId5"/></w:sectPr></w:pPr><w:commentRangeStart w:id="0"/><w:bookmarkStart w:id="1" w:name="bm"/><w:r><w:t>text</w:t></w:r><w:commentRangeEnd w:id="0"/><w:bookmarkEnd w:id="1"/></w:p>`)
 
 	sanitizeForInsertion([]*etree.Element{el})
@@ -936,8 +940,12 @@ func TestSanitize_CombinedMarkup(t *testing.T) {
 	if findDescendant(el, "w", "commentRangeStart") != nil {
 		t.Error("commentRangeStart should have been removed")
 	}
-	if findDescendant(el, "w", "bookmarkStart") != nil {
-		t.Error("bookmarkStart should have been removed")
+	// Bookmarks are preserved (renumbered separately).
+	if findDescendant(el, "w", "bookmarkStart") == nil {
+		t.Error("bookmarkStart should be preserved")
+	}
+	if findDescendant(el, "w", "bookmarkEnd") == nil {
+		t.Error("bookmarkEnd should be preserved")
 	}
 	if el.FindElement(".//w:t") == nil {
 		t.Error("run text should have been preserved")
@@ -1920,5 +1928,328 @@ func TestImportGenericPart_DeepCopiesSubRels(t *testing.T) {
 	// Both parts in dedup map.
 	if len(importedParts) != 2 {
 		t.Errorf("expected 2 importedParts, got %d", len(importedParts))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bookmark renumbering tests
+// ---------------------------------------------------------------------------
+
+// newTestDocPart creates a minimal DocumentPart for bookmark renumbering tests.
+// The document body has no pre-existing bookmarks, so NextBookmarkID starts at 1.
+func newTestDocPart(t *testing.T) *parts.DocumentPart {
+	t.Helper()
+	opcPkg := opc.NewOpcPackage(nil)
+	el := etree.NewElement("w:document")
+	body := el.CreateElement("w:body")
+	body.CreateElement("w:p")
+	xp := opc.NewXmlPartFromElement("/word/document.xml", "application/xml", el, opcPkg)
+	xp.SetRels(opc.NewRelationships("/word"))
+	return parts.NewDocumentPart(xp)
+}
+
+func TestRenumberBookmarks_SinglePair(t *testing.T) {
+	// One bookmark: start(id=5, name="bm1") + end(id=5) →
+	// renumbered to the same new id, name gets suffix.
+	el := makeElement(t, `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:bookmarkStart w:id="5" w:name="bm1"/><w:r><w:t>text</w:t></w:r><w:bookmarkEnd w:id="5"/></w:p>`)
+
+	dp := newTestDocPart(t)
+	renumberBookmarks([]*etree.Element{el}, dp)
+
+	bs := findDescendant(el, "w", "bookmarkStart")
+	be := findDescendant(el, "w", "bookmarkEnd")
+	if bs == nil || be == nil {
+		t.Fatal("bookmarkStart or bookmarkEnd not found")
+	}
+
+	startID := bs.SelectAttrValue("w:id", "")
+	endID := be.SelectAttrValue("w:id", "")
+	if startID != endID {
+		t.Errorf("start id (%s) != end id (%s)", startID, endID)
+	}
+	// ID should differ from original (5).
+	if startID == "5" {
+		t.Error("bookmark id should have been renumbered away from 5")
+	}
+	// Name should have suffix.
+	name := bs.SelectAttrValue("w:name", "")
+	if !strings.HasPrefix(name, "bm1_imp") {
+		t.Errorf("bookmark name should have _imp suffix, got %q", name)
+	}
+}
+
+func TestRenumberBookmarks_MultiplePairs(t *testing.T) {
+	// Three bookmark pairs → all ids unique.
+	xml := `<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+		<w:p>
+			<w:bookmarkStart w:id="1" w:name="a"/>
+			<w:bookmarkEnd w:id="1"/>
+		</w:p>
+		<w:p>
+			<w:bookmarkStart w:id="2" w:name="b"/>
+			<w:bookmarkEnd w:id="2"/>
+		</w:p>
+		<w:p>
+			<w:bookmarkStart w:id="3" w:name="c"/>
+			<w:bookmarkEnd w:id="3"/>
+		</w:p>
+	</w:body>`
+	el := makeElement(t, xml)
+
+	dp := newTestDocPart(t)
+	renumberBookmarks([]*etree.Element{el}, dp)
+
+	// Collect all bookmarkStart ids.
+	ids := map[string]bool{}
+	for _, p := range el.ChildElements() {
+		for _, child := range p.ChildElements() {
+			if child.Space == "w" && child.Tag == "bookmarkStart" {
+				id := child.SelectAttrValue("w:id", "")
+				if ids[id] {
+					t.Errorf("duplicate bookmark id: %s", id)
+				}
+				ids[id] = true
+			}
+		}
+	}
+	if len(ids) != 3 {
+		t.Errorf("expected 3 unique bookmark ids, got %d", len(ids))
+	}
+}
+
+func TestRenumberBookmarks_NestedPairs(t *testing.T) {
+	// Nested bookmarks: start1, start2, end2, end1 → both pairs correctly renumbered.
+	xml := `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+		<w:bookmarkStart w:id="10" w:name="outer"/>
+		<w:bookmarkStart w:id="20" w:name="inner"/>
+		<w:r><w:t>text</w:t></w:r>
+		<w:bookmarkEnd w:id="20"/>
+		<w:bookmarkEnd w:id="10"/>
+	</w:p>`
+	el := makeElement(t, xml)
+
+	dp := newTestDocPart(t)
+	renumberBookmarks([]*etree.Element{el}, dp)
+
+	// Collect start ids and end ids by name.
+	startIDs := map[string]string{}
+	var endIDs []string
+	for _, child := range el.ChildElements() {
+		if child.Space == "w" && child.Tag == "bookmarkStart" {
+			name := child.SelectAttrValue("w:name", "")
+			startIDs[name] = child.SelectAttrValue("w:id", "")
+		}
+		if child.Space == "w" && child.Tag == "bookmarkEnd" {
+			endIDs = append(endIDs, child.SelectAttrValue("w:id", ""))
+		}
+	}
+
+	if len(startIDs) != 2 {
+		t.Fatalf("expected 2 bookmarkStarts, got %d", len(startIDs))
+	}
+	if len(endIDs) != 2 {
+		t.Fatalf("expected 2 bookmarkEnds, got %d", len(endIDs))
+	}
+
+	// Both pairs should have matching start/end ids and differ from each other.
+	var outerStartID, innerStartID string
+	for name, id := range startIDs {
+		if strings.HasPrefix(name, "outer") {
+			outerStartID = id
+		} else if strings.HasPrefix(name, "inner") {
+			innerStartID = id
+		}
+	}
+	if outerStartID == innerStartID {
+		t.Error("outer and inner bookmark ids should differ")
+	}
+
+	// Verify end ids match their start ids.
+	// endIDs[0] corresponds to inner (end id=20 was first in DFS), endIDs[1] to outer.
+	// But DFS order via stack reverses child order. Let's just check both end IDs
+	// are present in the start IDs.
+	endSet := map[string]bool{}
+	for _, id := range endIDs {
+		endSet[id] = true
+	}
+	if !endSet[outerStartID] {
+		t.Errorf("no bookmarkEnd with id matching outer start (%s)", outerStartID)
+	}
+	if !endSet[innerStartID] {
+		t.Errorf("no bookmarkEnd with id matching inner start (%s)", innerStartID)
+	}
+}
+
+func TestRenumberBookmarks_NameDedup(t *testing.T) {
+	// Two separate calls to renumberBookmarks → name suffixes must not collide.
+	el1 := makeElement(t, `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:bookmarkStart w:id="1" w:name="bm"/><w:bookmarkEnd w:id="1"/></w:p>`)
+	el2 := makeElement(t, `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:bookmarkStart w:id="1" w:name="bm"/><w:bookmarkEnd w:id="1"/></w:p>`)
+
+	dp := newTestDocPart(t)
+	renumberBookmarks([]*etree.Element{el1}, dp)
+	renumberBookmarks([]*etree.Element{el2}, dp)
+
+	name1 := findDescendant(el1, "w", "bookmarkStart").SelectAttrValue("w:name", "")
+	name2 := findDescendant(el2, "w", "bookmarkStart").SelectAttrValue("w:name", "")
+	if name1 == name2 {
+		t.Errorf("names should differ across calls, both got %q", name1)
+	}
+	// Both should have _imp prefix.
+	if !strings.HasPrefix(name1, "bm_imp") || !strings.HasPrefix(name2, "bm_imp") {
+		t.Errorf("names should have _imp suffix: %q, %q", name1, name2)
+	}
+
+	// IDs should also differ across calls.
+	id1 := findDescendant(el1, "w", "bookmarkStart").SelectAttrValue("w:id", "")
+	id2 := findDescendant(el2, "w", "bookmarkStart").SelectAttrValue("w:id", "")
+	if id1 == id2 {
+		t.Errorf("bookmark ids should differ across calls, both got %s", id1)
+	}
+}
+
+func TestRenumberBookmarks_NoBookmarks(t *testing.T) {
+	// No bookmarks → no-op, no panic.
+	el := makeElement(t, `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:t>text</w:t></w:r></w:p>`)
+
+	dp := newTestDocPart(t)
+	renumberBookmarks([]*etree.Element{el}, dp)
+
+	if el.FindElement(".//w:t") == nil {
+		t.Error("text should be preserved")
+	}
+}
+
+func TestRenumberBookmarks_SpanningMultipleParagraphs(t *testing.T) {
+	// Bookmark spanning two paragraphs: start in p1, end in p2.
+	p1 := makeElement(t, `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:bookmarkStart w:id="7" w:name="span"/><w:r><w:t>first</w:t></w:r></w:p>`)
+	p2 := makeElement(t, `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:t>second</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>`)
+
+	dp := newTestDocPart(t)
+	renumberBookmarks([]*etree.Element{p1, p2}, dp)
+
+	bs := findDescendant(p1, "w", "bookmarkStart")
+	be := findDescendant(p2, "w", "bookmarkEnd")
+	if bs == nil || be == nil {
+		t.Fatal("bookmarkStart or bookmarkEnd not found")
+	}
+
+	startID := bs.SelectAttrValue("w:id", "")
+	endID := be.SelectAttrValue("w:id", "")
+	if startID != endID {
+		t.Errorf("start id (%s) != end id (%s) for spanning bookmark", startID, endID)
+	}
+	if startID == "7" {
+		t.Error("bookmark id should have been renumbered away from 7")
+	}
+}
+
+func TestNextBookmarkID_ScansExisting(t *testing.T) {
+	// DocumentPart with pre-existing bookmarks in the body.
+	opcPkg := opc.NewOpcPackage(nil)
+	el := etree.NewElement("w:document")
+	body := el.CreateElement("w:body")
+	p := body.CreateElement("w:p")
+	bs := p.CreateElement("w:bookmarkStart")
+	bs.CreateAttr("w:id", "42")
+	bs.CreateAttr("w:name", "existing")
+	be := p.CreateElement("w:bookmarkEnd")
+	be.CreateAttr("w:id", "42")
+
+	xp := opc.NewXmlPartFromElement("/word/document.xml", "application/xml", el, opcPkg)
+	xp.SetRels(opc.NewRelationships("/word"))
+	dp := parts.NewDocumentPart(xp)
+
+	// First call should scan and return 43.
+	got := dp.NextBookmarkID()
+	if got != 43 {
+		t.Errorf("NextBookmarkID() = %d, want 43", got)
+	}
+	// Second call should return 44.
+	got = dp.NextBookmarkID()
+	if got != 44 {
+		t.Errorf("NextBookmarkID() = %d, want 44", got)
+	}
+}
+
+func TestRWC_BookmarksImported_RoundTrip(t *testing.T) {
+	// Integration: source with bookmarks → ReplaceWithContent → bookmarks
+	// present in target with unique id and suffixed name.
+	target := mustNewDoc(t)
+	target.AddParagraph("__MARK__")
+
+	source := mustNewDoc(t)
+	// Add a bookmark to the source document body.
+	srcBody := source.element.Body().RawElement()
+	p := etree.NewElement("w:p")
+	bs := p.CreateElement("w:bookmarkStart")
+	bs.CreateAttr("w:id", "1")
+	bs.CreateAttr("w:name", "srcBookmark")
+	r := p.CreateElement("w:r")
+	wt := r.CreateElement("w:t")
+	wt.SetText("bookmarked text")
+	be := p.CreateElement("w:bookmarkEnd")
+	be.CreateAttr("w:id", "1")
+	// Insert before sectPr.
+	inserted := false
+	for i, child := range srcBody.ChildElements() {
+		if child.Space == "w" && child.Tag == "sectPr" {
+			srcBody.InsertChildAt(i, p)
+			inserted = true
+			break
+		}
+	}
+	if !inserted {
+		srcBody.AddChild(p)
+	}
+
+	cd := ContentData{Source: source}
+	n, err := target.ReplaceWithContent("__MARK__", cd)
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 replacement, got %d", n)
+	}
+
+	// Verify bookmarks are in the target body.
+	targetBody := target.element.Body().RawElement()
+	var foundBS, foundBE *etree.Element
+	var stack []*etree.Element
+	stack = append(stack, targetBody.ChildElements()...)
+	for len(stack) > 0 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if cur.Space == "w" && cur.Tag == "bookmarkStart" {
+			foundBS = cur
+		}
+		if cur.Space == "w" && cur.Tag == "bookmarkEnd" {
+			foundBE = cur
+		}
+		stack = append(stack, cur.ChildElements()...)
+	}
+
+	if foundBS == nil {
+		t.Fatal("bookmarkStart not found in target body")
+	}
+	if foundBE == nil {
+		t.Fatal("bookmarkEnd not found in target body")
+	}
+
+	// IDs should match (paired).
+	bsID := foundBS.SelectAttrValue("w:id", "")
+	beID := foundBE.SelectAttrValue("w:id", "")
+	if bsID != beID {
+		t.Errorf("bookmarkStart id (%s) != bookmarkEnd id (%s)", bsID, beID)
+	}
+
+	// Name should have _imp suffix.
+	name := foundBS.SelectAttrValue("w:name", "")
+	if !strings.HasPrefix(name, "srcBookmark_imp") {
+		t.Errorf("bookmark name should have _imp suffix, got %q", name)
+	}
+
+	// ID should be a valid integer.
+	if _, err := strconv.Atoi(bsID); err != nil {
+		t.Errorf("bookmark id is not a valid integer: %q", bsID)
 	}
 }
