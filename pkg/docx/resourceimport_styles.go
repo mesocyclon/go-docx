@@ -40,7 +40,12 @@ func (ri *ResourceImporter) importStyles() error {
 	}
 	ri.styleDone = true
 
-	// 0. Detect default paragraph style mismatch.
+	// Step 0: Compute docDefaults delta (readonly, one-time).
+	if err := ri.computeDocDefaultsDelta(); err != nil {
+		return fmt.Errorf("docx: computing docDefaults delta: %w", err)
+	}
+
+	// Step 1: Detect default paragraph style mismatch.
 	// If source and target have different defaults, paragraphs without
 	// explicit pStyle will silently change appearance. We record the
 	// source default so materializeImplicitStyles can fix this later.
@@ -48,7 +53,7 @@ func (ri *ResourceImporter) importStyles() error {
 		return fmt.Errorf("docx: detecting default style mismatch: %w", err)
 	}
 
-	// 1. Collect all styleId values from source body.
+	// Step 2: Collect all styleId values from source body.
 	seedIds := collectStyleIdsFromBody(ri.sourceDoc)
 
 	// If materialization is needed, the source default style must also
@@ -61,15 +66,20 @@ func (ri *ResourceImporter) importStyles() error {
 		return nil
 	}
 
-	// 2. Compute transitive closure over style dependencies.
+	// Step 3: Compute transitive closure over style dependencies.
 	closure := ri.collectStyleClosure(seedIds)
 
-	// 3. Merge each style into target.
+	// Pass 1: Merge each style — builds styleMap, collects clones.
 	for _, srcStyle := range closure {
 		if err := ri.mergeOneStyle(srcStyle); err != nil {
 			return err
 		}
 	}
+
+	// Pass 2: Fixup clones — remap refs + compensate delta.
+	// styleMap is now complete for all styles in the closure.
+	ri.fixupCopiedStyles()
+
 	return nil
 }
 
@@ -84,10 +94,21 @@ func (ri *ResourceImporter) importStylesForElements(elements []*etree.Element) e
 		return nil
 	}
 	closure := ri.collectStyleClosure(seedIds)
+
+	// Record clone count before merge to only fixup newly added clones.
+	prevLen := len(ri.copiedClones)
+
 	for _, srcStyle := range closure {
 		if err := ri.mergeOneStyle(srcStyle); err != nil {
 			return err
 		}
+	}
+
+	// Pass 2 for newly added clones only.
+	for i := prevLen; i < len(ri.copiedClones); i++ {
+		entry := ri.copiedClones[i]
+		ri.remapStyleRefsInElement(entry.clone)
+		ri.compensateDocDefaults(entry.clone, entry.srcStyle)
 	}
 	return nil
 }
@@ -168,18 +189,19 @@ func (ri *ResourceImporter) collectStyleClosure(seedIds []string) []*oxml.CT_Sty
 // mergeOneStyle merges a single source style into the target document.
 // Behavior depends on ri.importFormatMode:
 //
-// All modes — style NOT in target:
+// All modes — style NOT in target (by ID or built-in name fallback):
 //
 //	Deep-copy from source. All 3 modes agree on this.
 //
 // UseDestinationStyles — style EXISTS in target:
 //
-//	Use target definition. styleMap[id] = id.
+//	Use target definition. styleMap[srcId] = targetId.
+//	targetId may differ from srcId when matched by name (locale).
 //
 // KeepSourceFormatting — style EXISTS in target:
 //
 //	ForceCopyStyles: copy with unique suffix (Heading1 → Heading1_0).
-//	Default: mark for expansion to direct attributes. styleMap[id] = target default.
+//	Default: mark for expansion to direct attributes.
 //
 // KeepDifferentStyles — style EXISTS in target:
 //
@@ -203,17 +225,29 @@ func (ri *ResourceImporter) mergeOneStyle(srcStyle *oxml.CT_Style) error {
 
 	existing := tgtStyles.GetByID(id)
 
+	// Name-based fallback for built-in styles.
+	// Localized documents use locale-specific styleId for built-in styles:
+	//   RU: "a" for Normal, "a1" for Normal Table
+	//   EN: "Normal", "TableNormal"
+	// OOXML guarantees w:name uniqueness per type for built-in styles.
+	if existing == nil && srcStyle.IsBuiltin() {
+		existing = ri.findBuiltinByName(srcStyle, tgtStyles)
+	}
+
 	// --- Style NOT in target: always copy (all 3 modes agree) ---
 	if existing == nil {
 		return ri.copyStyleToTarget(srcStyle, id)
 	}
 
 	// --- Style EXISTS in target: behavior depends on mode ---
+	// Use actual target styleId (may differ from source id due to locale).
+	targetId := existing.StyleId()
+
 	switch ri.importFormatMode {
 
 	case UseDestinationStyles:
-		// Conflict → use target definition. Original behavior.
-		ri.styleMap[id] = id
+		// Conflict → use target definition.
+		ri.styleMap[id] = targetId
 
 	case KeepSourceFormatting:
 		if ri.opts.ForceCopyStyles {
@@ -227,7 +261,7 @@ func (ri *ResourceImporter) mergeOneStyle(srcStyle *oxml.CT_Style) error {
 	case KeepDifferentStyles:
 		if stylesContentEqual(srcStyle, existing) {
 			// Same formatting → use target (like UseDestinationStyles).
-			ri.styleMap[id] = id
+			ri.styleMap[id] = targetId
 		} else {
 			// Different formatting → behave like KeepSourceFormatting.
 			if ri.opts.ForceCopyStyles {
@@ -245,7 +279,9 @@ func (ri *ResourceImporter) mergeOneStyle(srcStyle *oxml.CT_Style) error {
 // w:styleId attribute and w:name value are updated to prevent confusion
 // in Word's style gallery.
 //
-// Handles numId and basedOn/next/link remapping on the clone.
+// Pass 1 only: numId remapping is done immediately (numIdMap is complete).
+// basedOn/next/link remapping and docDefaults compensation are deferred
+// to Pass 2 (fixupCopiedStyles) when the full styleMap is available.
 func (ri *ResourceImporter) copyStyleToTarget(srcStyle *oxml.CT_Style, targetId string) error {
 	tgtStyles, err := ri.targetStyles()
 	if err != nil {
@@ -253,6 +289,10 @@ func (ri *ResourceImporter) copyStyleToTarget(srcStyle *oxml.CT_Style, targetId 
 	}
 
 	clone := srcStyle.RawElement().Copy()
+
+	// Strip w:default="1" — target already has its own defaults.
+	// Two defaults of the same type produce invalid OOXML (§17.7.4.9).
+	stripDefaultFlag(clone)
 
 	// Rename styleId and display name when copying under a new ID.
 	if targetId != srcStyle.StyleId() {
@@ -276,15 +316,23 @@ func (ri *ResourceImporter) copyStyleToTarget(srcStyle *oxml.CT_Style, targetId 
 	}
 
 	// Remap numId inside the copied style definition (if present).
-	// Done here because styles inserted into styles.xml are not part
-	// of the body element copies that remapAll processes.
+	// Done here because numIdMap is complete at this point (Phase 1
+	// numbering import runs before style import).
 	ri.remapNumIdsInElement(clone)
 
-	// Remap basedOn/next/link references through styleMap.
-	ri.remapStyleRefsInElement(clone)
+	// DO NOT remap basedOn/next/link here — styleMap is incomplete.
+	// DO NOT compensate docDefaults here — need full styleMap.
+	// Both are deferred to Pass 2 (fixupCopiedStyles).
 
 	tgtStyles.RawElement().AddChild(clone)
 	ri.styleMap[srcStyle.StyleId()] = targetId
+	ri.copiedStyleIds[srcStyle.StyleId()] = true
+
+	// Collect for Pass 2.
+	ri.copiedClones = append(ri.copiedClones, copiedStyleEntry{
+		clone:    clone,
+		srcStyle: srcStyle,
+	})
 	return nil
 }
 
@@ -733,13 +781,40 @@ func (ri *ResourceImporter) expandRunStyle(rEl *etree.Element) {
 // and merges pPr/rPr properties from base to derived (child overrides
 // parent). Returns deep copies safe to modify.
 //
+// Fix A: the chain starts with source docDefaults as the base. This ensures
+// properties inherited from source docDefaults are included in the resolved
+// result. Without this, properties not explicitly set in the chain would be
+// missing, causing them to inherit from TARGET docDefaults after insertion.
+//
+// Used by the expand path (KeepSourceFormatting).
+func (ri *ResourceImporter) resolveStyleChain(style *oxml.CT_Style) (pPr, rPr *etree.Element) {
+	return ri.resolveStyleChainOpt(style, true)
+}
+
+// resolveStyleChainRaw walks the basedOn chain WITHOUT including source
+// docDefaults in the base. Returns only properties explicitly defined in
+// the style definitions themselves.
+//
+// Used by compensateUncovered to determine which properties are covered
+// by style definitions (as opposed to docDefaults). Properties only
+// from docDefaults must NOT count as "covered" because they won't carry
+// over to the target — the target has its own docDefaults.
+func (ri *ResourceImporter) resolveStyleChainRaw(style *oxml.CT_Style) (pPr, rPr *etree.Element) {
+	return ri.resolveStyleChainOpt(style, false)
+}
+
+// resolveStyleChainOpt is the core chain resolver. When includeDocDefaults
+// is true, source docDefaults are used as the chain base (Fix A for expand
+// path). When false, only style definitions are merged (for compensation
+// chain coverage check).
+//
 // The chain is built root-first [style, parent, grandparent, ...] then
 // merged in reverse order so that derived style properties override
 // inherited ones.
 //
 // Cycle protection via visited set prevents infinite loops on malformed
 // style definitions.
-func (ri *ResourceImporter) resolveStyleChain(style *oxml.CT_Style) (pPr, rPr *etree.Element) {
+func (ri *ResourceImporter) resolveStyleChainOpt(style *oxml.CT_Style, includeDocDefaults bool) (pPr, rPr *etree.Element) {
 	srcStyles, err := ri.sourceStyles()
 	if err != nil {
 		return nil, nil
@@ -762,6 +837,21 @@ func (ri *ResourceImporter) resolveStyleChain(style *oxml.CT_Style) (pPr, rPr *e
 			break
 		}
 		current = srcStyles.GetByID(basedOn)
+	}
+
+	// Optionally start with source docDefaults as the base of the chain.
+	// Fix A: for the expand path, this ensures properties inherited from
+	// source docDefaults are included in the resolved result.
+	// For compensation chain checks, docDefaults are excluded so that
+	// properties only from docDefaults are not incorrectly considered
+	// "covered by the chain".
+	if includeDocDefaults {
+		if ri.srcDocDefaultsPPr != nil {
+			pPr = ri.srcDocDefaultsPPr.Copy()
+		}
+		if ri.srcDocDefaultsRPr != nil {
+			rPr = ri.srcDocDefaultsRPr.Copy()
+		}
 	}
 
 	// Merge from base to derived (so derived overrides base).
@@ -904,4 +994,420 @@ func appendUnique(slice []string, val string) []string {
 		}
 	}
 	return append(slice, val)
+}
+
+// --------------------------------------------------------------------------
+// docDefaults delta computation (Fix B infrastructure)
+// --------------------------------------------------------------------------
+
+// docDefaultsDelta represents the difference between source and target
+// docDefaults that must be injected into copied styles to preserve their
+// visual appearance in the target document.
+//
+// OOXML formatting resolution:
+//
+//	effective = docDefaults + style chain + direct formatting
+//
+// When a style is designed for source docDefaults but placed atop target
+// docDefaults, any property it inherits (doesn't explicitly set) will
+// change value. The delta captures exactly these "inherited" properties
+// so they can be materialized as explicit values in the copied style.
+//
+// Fields are *etree.Element (w:pPr and w:rPr) containing ONLY the
+// properties that differ between source and target docDefaults.
+// nil means no delta for that property group.
+type docDefaultsDelta struct {
+	rPr *etree.Element
+	pPr *etree.Element
+}
+
+// copiedStyleEntry tracks a style clone created during Pass 1 (merge loop)
+// for deferred processing in Pass 2 (fixupCopiedStyles).
+type copiedStyleEntry struct {
+	clone    *etree.Element // deep-copied style element, already added to target
+	srcStyle *oxml.CT_Style // original source style (readonly, for chain resolution)
+}
+
+// ooxmlImplicitRPr contains OOXML-spec default values for run properties
+// that are assumed when docDefaults omits them. These values are needed
+// when source docDefaults omits a property but target specifies it —
+// the delta must contain the spec default so it can be injected.
+//
+// Reference: ECMA-376 Part 1, §17.3.2 (rPr), §17.3.1 (pPr)
+var ooxmlImplicitRPr = map[string]map[string]string{
+	"sz":   {"w:val": "20"}, // 10pt — ECMA-376 §17.3.2.38
+	"szCs": {"w:val": "20"}, // 10pt — ECMA-376 §17.3.2.39
+	// rFonts: implementation-defined per ECMA-376 §17.3.2.26.
+	// De facto standard across all Word versions is Times New Roman.
+	"rFonts": {
+		"w:ascii": "Times New Roman", "w:hAnsi": "Times New Roman",
+		"w:eastAsia": "Times New Roman", "w:cs": "Times New Roman",
+	},
+}
+
+var ooxmlImplicitPPr = map[string]map[string]string{
+	"spacing": {
+		"w:after": "0", "w:before": "0",
+		"w:line": "240", "w:lineRule": "auto",
+	},
+	"jc":  {"w:val": "left"},
+	"ind": {"w:left": "0", "w:right": "0"},
+}
+
+// computeDocDefaultsDelta computes the difference between source and target
+// docDefaults and stores the result in ri.docDefDelta.
+// Also stores source docDefaults elements (readonly refs) for resolveStyleChain.
+//
+// Called once at the start of importStyles(). Safe to call with missing
+// styles parts (returns nil delta).
+func (ri *ResourceImporter) computeDocDefaultsDelta() error {
+	srcStyles, err := ri.sourceStyles()
+	if err != nil {
+		return nil // no styles part in source — no delta
+	}
+	tgtStyles, err := ri.targetStyles()
+	if err != nil {
+		return err
+	}
+
+	// Store source docDefaults for resolveStyleChain (Fix A).
+	// These are readonly refs into the source styles.xml tree.
+	srcPPr := srcStyles.DocDefaultsPPr()
+	srcRPr := srcStyles.DocDefaultsRPr()
+	ri.srcDocDefaultsPPr = srcPPr
+	ri.srcDocDefaultsRPr = srcRPr
+
+	// Compute delta (Fix B).
+	tgtPPr := tgtStyles.DocDefaultsPPr()
+	tgtRPr := tgtStyles.DocDefaultsRPr()
+
+	deltaPPr := diffProperties(srcPPr, tgtPPr, ooxmlImplicitPPr)
+	deltaRPr := diffProperties(srcRPr, tgtRPr, ooxmlImplicitRPr)
+
+	if deltaPPr == nil && deltaRPr == nil {
+		return nil // identical docDefaults — fast path
+	}
+	ri.docDefDelta = &docDefaultsDelta{pPr: deltaPPr, rPr: deltaRPr}
+	return nil
+}
+
+// diffProperties computes the delta between source and target property
+// elements (w:pPr or w:rPr from docDefaults). Returns an element containing
+// only the properties that differ, or nil if there are no differences.
+//
+// implicitDefaults provides OOXML-spec default values for properties that
+// are absent in the source but present in the target (the source effectively
+// uses the spec default for those properties).
+//
+// Granularity: attribute-level within each child element (e.g. w:spacing
+// may have w:after and w:line differing while w:lineRule matches).
+func diffProperties(src, tgt *etree.Element, implicitDefaults map[string]map[string]string) *etree.Element {
+	// Both nil or both absent — no delta.
+	if src == nil && tgt == nil {
+		return nil
+	}
+
+	// Target nil means target uses spec defaults for everything.
+	// Source values (explicit or implicit) are already correct — no delta needed.
+	if tgt == nil {
+		return nil
+	}
+
+	// Determine container tag from tgt (e.g. "pPr" or "rPr").
+	result := etree.NewElement(tgt.Space + ":" + tgt.Tag)
+
+	// Case 1: Properties in source that differ from target.
+	if src != nil {
+		for _, srcChild := range src.ChildElements() {
+			tgtChild := findChild(tgt, srcChild.Space, srcChild.Tag)
+			if tgtChild == nil {
+				// Target doesn't set this property — no change in effective
+				// value regardless of docDefaults. Skip.
+				continue
+			}
+			// Both have this property — compare attribute-level.
+			deltaChild := diffElementAttrs(srcChild, tgtChild)
+			if deltaChild != nil {
+				result.AddChild(deltaChild)
+			}
+		}
+	}
+
+	// Case 2: Properties only in target (source doesn't set them).
+	// Source effectively uses OOXML implicit default. If implicit ≠ target,
+	// we need a delta to restore the implicit value.
+	for _, tgtChild := range tgt.ChildElements() {
+		var srcChild *etree.Element
+		if src != nil {
+			srcChild = findChild(src, tgtChild.Space, tgtChild.Tag)
+		}
+		if srcChild != nil {
+			continue // already handled in Case 1
+		}
+		// Source doesn't have this property — check implicit defaults.
+		implAttrs, ok := implicitDefaults[tgtChild.Tag]
+		if !ok {
+			continue // no implicit default known — can't compute delta
+		}
+		deltaChild := etree.NewElement(tgtChild.Space + ":" + tgtChild.Tag)
+		for attrKey, implVal := range implAttrs {
+			tgtVal := tgtChild.SelectAttrValue(attrKey, "")
+			if tgtVal != implVal {
+				deltaChild.CreateAttr(attrKey, implVal)
+			}
+		}
+		if len(deltaChild.Attr) > 0 {
+			result.AddChild(deltaChild)
+		}
+	}
+
+	if len(result.ChildElements()) == 0 {
+		return nil
+	}
+	return result
+}
+
+// diffElementAttrs compares attributes of two elements with the same tag.
+// Returns a delta element containing only the source attributes that differ
+// from target, or nil if all attributes match.
+func diffElementAttrs(src, tgt *etree.Element) *etree.Element {
+	delta := etree.NewElement(src.Space + ":" + src.Tag)
+	for _, attr := range src.Attr {
+		tgtVal := tgt.SelectAttrValue(attr.FullKey(), "")
+		if tgtVal == "" || tgtVal != attr.Value {
+			delta.CreateAttr(attr.FullKey(), attr.Value)
+		}
+	}
+	if len(delta.Attr) == 0 {
+		return nil
+	}
+	return delta
+}
+
+// --------------------------------------------------------------------------
+// Two-pass architecture: Pass 2 — fixup copied styles
+// --------------------------------------------------------------------------
+
+// fixupCopiedStyles performs deferred operations on copied style clones
+// that require the full styleMap to be available:
+//
+//  1. Remap basedOn/next/link references through styleMap.
+//     (Fixes BUG 1: during BFS merge, children are processed before
+//     parents, so parent mappings are not yet in styleMap.)
+//
+//  2. Compensate docDefaults delta for paragraph/character styles.
+//     (Fixes Defect A: need to know which parents are copied vs mapped
+//     to determine compensation strategy.)
+//
+// Called once, after the merge loop completes in importStyles().
+func (ri *ResourceImporter) fixupCopiedStyles() {
+	for _, entry := range ri.copiedClones {
+		// 1. Remap basedOn/next/link — styleMap is now complete.
+		ri.remapStyleRefsInElement(entry.clone)
+
+		// 2. Compensate docDefaults delta.
+		ri.compensateDocDefaults(entry.clone, entry.srcStyle)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Fix B: docDefaults compensation for copied styles
+// --------------------------------------------------------------------------
+
+// compensationAction describes how to inject docDefaults delta into a
+// copied style clone.
+type compensationAction int
+
+const (
+	compensateAll       compensationAction = iota // root: inject all delta
+	compensateNone                                // parent copied: skip
+	compensateUncovered                           // parent in target: inject uncovered
+)
+
+// compensateDocDefaults injects source docDefaults delta into a copied
+// style clone so that properties inherited from source docDefaults are
+// preserved in the target document (which has different docDefaults).
+//
+// Only processes paragraph and character styles. Table, numbering, and
+// other style types are skipped — docDefaults pPr/rPr do not cascade
+// into tblPr or list formatting per OOXML spec.
+//
+// Precondition: styleMap is complete (called in Pass 2).
+func (ri *ResourceImporter) compensateDocDefaults(clone *etree.Element, srcStyle *oxml.CT_Style) {
+	if ri.docDefDelta == nil {
+		return
+	}
+
+	// Only paragraph and character styles inherit from pPrDefault/rPrDefault.
+	styleType := clone.SelectAttrValue("w:type", "")
+	if styleType != "paragraph" && styleType != "character" {
+		return
+	}
+
+	strategy := ri.compensationStrategy(srcStyle)
+
+	switch strategy {
+	case compensateAll:
+		// Root style: inject all delta not in clone itself.
+		ri.injectDelta(clone, nil)
+	case compensateNone:
+		// Parent also copied: skip (transitive coverage).
+		return
+	case compensateUncovered:
+		// Parent in target: resolve source chain WITHOUT docDefaults,
+		// inject delta for properties NOT covered by style definitions.
+		// docDefaults are excluded because they don't carry over to the
+		// target — target has its own docDefaults.
+		resolvedPPr, resolvedRPr := ri.resolveStyleChainRaw(srcStyle)
+		ri.injectDelta(clone, &resolvedChain{pPr: resolvedPPr, rPr: resolvedRPr})
+	}
+}
+
+// compensationStrategy determines how to compensate a copied style.
+// Uses styleMap (complete at this point) and copiedClones to classify.
+func (ri *ResourceImporter) compensationStrategy(srcStyle *oxml.CT_Style) compensationAction {
+	basedOn, _ := srcStyle.BasedOnVal()
+	if basedOn == "" {
+		return compensateAll // no parent → root
+	}
+
+	// Check if parent was copied (exists in copiedClones).
+	if ri.isParentCopied(basedOn) {
+		return compensateNone // parent copied → transitive
+	}
+
+	// Parent is mapped to target or not in closure at all.
+	return compensateUncovered
+}
+
+// isParentCopied checks if a style with the given source ID was copied
+// (as opposed to mapped to an existing target style).
+func (ri *ResourceImporter) isParentCopied(srcStyleId string) bool {
+	return ri.copiedStyleIds[srcStyleId]
+}
+
+// resolvedChain holds the fully resolved source chain properties for
+// a style. Used by compensateUncovered to filter delta injection.
+type resolvedChain struct {
+	pPr *etree.Element
+	rPr *etree.Element
+}
+
+// injectDelta merges delta properties into clone's pPr/rPr.
+// If chain is nil (root style): injects all delta not in clone.
+// If chain is non-nil: injects only delta properties NOT present in chain.
+//
+// Only creates pPr/rPr containers when at least one property is injected.
+// Removes containers that remain empty after filtering.
+func (ri *ResourceImporter) injectDelta(clone *etree.Element, chain *resolvedChain) {
+	delta := ri.docDefDelta
+
+	if delta.pPr != nil {
+		clonePPr := findChild(clone, "w", "pPr")
+		created := clonePPr == nil
+		if created {
+			clonePPr = etree.NewElement("w:pPr")
+			clone.AddChild(clonePPr)
+		}
+		ri.injectGroupFiltered(clonePPr, delta.pPr, chain, "pPr")
+		// Remove container if we created it but nothing was injected.
+		if created && len(clonePPr.ChildElements()) == 0 {
+			clone.RemoveChild(clonePPr)
+		}
+	}
+
+	if delta.rPr != nil {
+		cloneRPr := findChild(clone, "w", "rPr")
+		created := cloneRPr == nil
+		if created {
+			cloneRPr = etree.NewElement("w:rPr")
+			clone.AddChild(cloneRPr)
+		}
+		ri.injectGroupFiltered(cloneRPr, delta.rPr, chain, "rPr")
+		// Remove container if we created it but nothing was injected.
+		if created && len(cloneRPr.ChildElements()) == 0 {
+			clone.RemoveChild(cloneRPr)
+		}
+	}
+}
+
+// injectGroupFiltered merges delta children into dst, skipping properties
+// that are already in dst (explicit > delta) or covered by chain.
+func (ri *ResourceImporter) injectGroupFiltered(
+	dst *etree.Element,
+	deltaSrc *etree.Element,
+	chain *resolvedChain,
+	group string, // "pPr" or "rPr"
+) {
+	for _, deltaChild := range deltaSrc.ChildElements() {
+		// Skip if clone already defines this property (explicit > delta).
+		if findChild(dst, deltaChild.Space, deltaChild.Tag) != nil {
+			continue
+		}
+		// Skip if source chain covers this property (only for compensateUncovered).
+		if chain != nil {
+			var chainGroup *etree.Element
+			if group == "pPr" {
+				chainGroup = chain.pPr
+			} else {
+				chainGroup = chain.rPr
+			}
+			if chainGroup != nil && findChild(chainGroup, deltaChild.Space, deltaChild.Tag) != nil {
+				continue
+			}
+		}
+		// Inject delta property.
+		dst.AddChild(deltaChild.Copy())
+	}
+}
+
+// --------------------------------------------------------------------------
+// Built-in style name-based resolution
+// --------------------------------------------------------------------------
+
+// findBuiltinByName resolves a source built-in style to a target built-in
+// style using w:name and w:type matching. Returns nil if no match found.
+//
+// This handles the OOXML localization pattern where built-in styles have
+// locale-specific styleId but identical w:name values across locales.
+// Example: Normal → "Normal" (EN), "a" (RU), "a" (JP).
+func (ri *ResourceImporter) findBuiltinByName(
+	srcStyle *oxml.CT_Style,
+	tgtStyles *oxml.CT_Styles,
+) *oxml.CT_Style {
+	srcName, err := srcStyle.NameVal()
+	if err != nil || srcName == "" {
+		return nil
+	}
+	srcType := srcStyle.Type()
+
+	candidate := tgtStyles.GetByName(srcName)
+	if candidate == nil {
+		return nil
+	}
+	// Must match type (paragraph "Normal" ≠ character "Normal").
+	if candidate.Type() != srcType {
+		return nil
+	}
+	// Must be built-in too (avoid matching custom style with same name).
+	if candidate.CustomStyle() {
+		return nil
+	}
+	return candidate
+}
+
+// stripDefaultFlag removes w:default="1" from a cloned style element.
+// A copied style must never declare itself as default — the target
+// already has its own default for each type. Two defaults of the
+// same type produce invalid OOXML (§17.7.4.9).
+func stripDefaultFlag(clone *etree.Element) {
+	filtered := clone.Attr[:0]
+	for _, attr := range clone.Attr {
+		if attr.Key == "default" && (attr.Space == "w" ||
+			strings.Contains(attr.Space, "wordprocessingml")) {
+			continue // strip
+		}
+		filtered = append(filtered, attr)
+	}
+	clone.Attr = filtered
 }

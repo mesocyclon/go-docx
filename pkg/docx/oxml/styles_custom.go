@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/beevik/etree"
 	"github.com/vortex/go-docx/pkg/docx/enum"
 )
 
@@ -396,6 +397,22 @@ func (ls *CT_LatentStyles) SetBoolProp(attrName string, val bool) error {
 	}
 	ls.SetAttr(attrName, s)
 	return nil
+}
+
+// DocDefaultsRPr returns the w:rPr element inside w:docDefaults/w:rPrDefault,
+// or nil if not present. The returned element belongs to the styles.xml tree —
+// do NOT modify it directly. Use Copy() if modification is needed.
+//
+// docDefaults are preserved through round-trip by etree but not modeled
+// in the codegen schema (they are rarely needed outside of import).
+func (ss *CT_Styles) DocDefaultsRPr() *etree.Element {
+	return ss.RawElement().FindElement("w:docDefaults/w:rPrDefault/w:rPr")
+}
+
+// DocDefaultsPPr returns the w:pPr element inside w:docDefaults/w:pPrDefault,
+// or nil. Same immutability contract as DocDefaultsRPr.
+func (ss *CT_Styles) DocDefaultsPPr() *etree.Element {
+	return ss.RawElement().FindElement("w:docDefaults/w:pPrDefault/w:pPr")
 }
 
 // ===========================================================================

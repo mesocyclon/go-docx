@@ -62,6 +62,25 @@ type ResourceImporter struct {
 	// Empty string means defaults match (no materialization needed).
 	srcDefaultParaStyleId string
 
+	// docDefDelta holds the computed docDefaults difference between
+	// source and target. Computed once in importStyles(), applied to
+	// copied style clones in fixupCopiedStyles(). nil if docDefaults
+	// are identical (no compensation needed).
+	docDefDelta *docDefaultsDelta
+
+	// Source docDefaults elements (readonly refs for resolveStyleChain).
+	// nil if source has no docDefaults. Copy() before modification.
+	srcDocDefaultsPPr *etree.Element
+	srcDocDefaultsRPr *etree.Element
+
+	// copiedClones collects style clones during Pass 1 (merge loop).
+	// Pass 2 (fixupCopiedStyles) processes them after styleMap is complete.
+	copiedClones []copiedStyleEntry
+
+	// copiedStyleIds tracks source styleIds that were copied (not mapped).
+	// O(1) lookup used by isParentCopied in compensation strategy.
+	copiedStyleIds map[string]bool
+
 	// Footnotes: source id → target id.
 	footnoteIdMap map[int]int
 	endnoteIdMap  map[int]int
@@ -92,6 +111,7 @@ func newResourceImporter(
 		absNumIdMap:      make(map[int]int),
 		styleMap:         make(map[string]string),
 		expandStyles:     make(map[string]*oxml.CT_Style),
+		copiedStyleIds:   make(map[string]bool),
 		footnoteIdMap:    make(map[int]int),
 		endnoteIdMap:     make(map[int]int),
 	}

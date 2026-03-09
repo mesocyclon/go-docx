@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/beevik/etree"
+	"github.com/vortex/go-docx/pkg/docx/opc"
 	"github.com/vortex/go-docx/pkg/docx/oxml"
+	"github.com/vortex/go-docx/pkg/docx/parts"
 )
 
 // --------------------------------------------------------------------------
@@ -1617,5 +1619,667 @@ func TestRemapAll_StyleOnlyNoNumIds(t *testing.T) {
 	got := pStyle.SelectAttrValue("w:val", "")
 	if got != "Renamed" {
 		t.Errorf("expected pStyle remapped to Renamed (even with empty numIdMap), got %s", got)
+	}
+}
+
+// --------------------------------------------------------------------------
+// diffProperties tests
+// --------------------------------------------------------------------------
+
+func TestDiffProperties_BothNil(t *testing.T) {
+	t.Parallel()
+	delta := diffProperties(nil, nil, ooxmlImplicitRPr)
+	if delta != nil {
+		t.Errorf("expected nil delta when both are nil, got %v", delta)
+	}
+}
+
+func TestDiffProperties_TargetNil(t *testing.T) {
+	t.Parallel()
+	// Source has sz=24, target is nil — no delta needed
+	// (target doesn't set anything, so source values are already correct).
+	xml := `<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:sz w:val="24"/>` +
+		`</w:rPr>`
+	src, _ := oxml.ParseXml([]byte(xml))
+
+	delta := diffProperties(src, nil, ooxmlImplicitRPr)
+	if delta != nil {
+		t.Errorf("expected nil delta when target is nil, got children: %d", len(delta.ChildElements()))
+	}
+}
+
+func TestDiffProperties_SourceNil_TargetHasSz(t *testing.T) {
+	t.Parallel()
+	// Source nil → uses implicit defaults. Target has sz=22.
+	// Delta should contain sz=20 (implicit 10pt).
+	xml := `<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:sz w:val="22"/><w:szCs w:val="22"/>` +
+		`</w:rPr>`
+	tgt, _ := oxml.ParseXml([]byte(xml))
+
+	delta := diffProperties(nil, tgt, ooxmlImplicitRPr)
+	if delta == nil {
+		t.Fatal("expected non-nil delta")
+	}
+
+	sz := findChild(delta, "w", "sz")
+	if sz == nil {
+		t.Fatal("expected sz in delta")
+	}
+	if v := sz.SelectAttrValue("w:val", ""); v != "20" {
+		t.Errorf("expected sz val=20, got %s", v)
+	}
+
+	szCs := findChild(delta, "w", "szCs")
+	if szCs == nil {
+		t.Fatal("expected szCs in delta")
+	}
+	if v := szCs.SelectAttrValue("w:val", ""); v != "20" {
+		t.Errorf("expected szCs val=20, got %s", v)
+	}
+}
+
+func TestDiffProperties_SourceNil_TargetHasSpacing(t *testing.T) {
+	t.Parallel()
+	xml := `<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:spacing w:after="160" w:line="259" w:lineRule="auto"/>` +
+		`</w:pPr>`
+	tgt, _ := oxml.ParseXml([]byte(xml))
+
+	delta := diffProperties(nil, tgt, ooxmlImplicitPPr)
+	if delta == nil {
+		t.Fatal("expected non-nil delta")
+	}
+
+	spacing := findChild(delta, "w", "spacing")
+	if spacing == nil {
+		t.Fatal("expected spacing in delta")
+	}
+	// after: implicit=0, target=160 → delta=0
+	if v := spacing.SelectAttrValue("w:after", ""); v != "0" {
+		t.Errorf("expected after=0, got %s", v)
+	}
+	// line: implicit=240, target=259 → delta=240
+	if v := spacing.SelectAttrValue("w:line", ""); v != "240" {
+		t.Errorf("expected line=240, got %s", v)
+	}
+	// lineRule: implicit=auto, target=auto → NO delta (same value)
+	if v := spacing.SelectAttrValue("w:lineRule", ""); v != "" {
+		t.Errorf("expected no lineRule in delta (same value), got %s", v)
+	}
+}
+
+func TestDiffProperties_Different_AttributeLevel(t *testing.T) {
+	t.Parallel()
+	srcXml := `<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>` +
+		`</w:pPr>`
+	tgtXml := `<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:spacing w:after="160" w:line="259" w:lineRule="auto"/>` +
+		`</w:pPr>`
+	src, _ := oxml.ParseXml([]byte(srcXml))
+	tgt, _ := oxml.ParseXml([]byte(tgtXml))
+
+	delta := diffProperties(src, tgt, ooxmlImplicitPPr)
+	if delta == nil {
+		t.Fatal("expected non-nil delta")
+	}
+
+	spacing := findChild(delta, "w", "spacing")
+	if spacing == nil {
+		t.Fatal("expected spacing in delta")
+	}
+	// after: src=0, tgt=160 → delta=0
+	if v := spacing.SelectAttrValue("w:after", ""); v != "0" {
+		t.Errorf("expected after=0, got %s", v)
+	}
+	// line: src=240, tgt=259 → delta=240
+	if v := spacing.SelectAttrValue("w:line", ""); v != "240" {
+		t.Errorf("expected line=240, got %s", v)
+	}
+	// lineRule: both auto → NOT in delta
+	if v := spacing.SelectAttrValue("w:lineRule", ""); v != "" {
+		t.Errorf("expected no lineRule in delta, got %s", v)
+	}
+}
+
+func TestDiffProperties_Identical(t *testing.T) {
+	t.Parallel()
+	xml := `<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:sz w:val="22"/>` +
+		`</w:rPr>`
+	src, _ := oxml.ParseXml([]byte(xml))
+	tgt, _ := oxml.ParseXml([]byte(xml))
+
+	delta := diffProperties(src, tgt, ooxmlImplicitRPr)
+	if delta != nil {
+		t.Errorf("expected nil delta for identical properties, got %d children", len(delta.ChildElements()))
+	}
+}
+
+func TestDiffProperties_RFonts_SourceExplicit_TargetTheme(t *testing.T) {
+	t.Parallel()
+	srcXml := `<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>` +
+		`</w:rPr>`
+	tgtXml := `<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi"/>` +
+		`</w:rPr>`
+	src, _ := oxml.ParseXml([]byte(srcXml))
+	tgt, _ := oxml.ParseXml([]byte(tgtXml))
+
+	delta := diffProperties(src, tgt, ooxmlImplicitRPr)
+	if delta == nil {
+		t.Fatal("expected non-nil delta for rFonts mismatch")
+	}
+	rFonts := findChild(delta, "w", "rFonts")
+	if rFonts == nil {
+		t.Fatal("expected rFonts in delta")
+	}
+	if v := rFonts.SelectAttrValue("w:ascii", ""); v != "Times New Roman" {
+		t.Errorf("expected ascii=Times New Roman, got %s", v)
+	}
+}
+
+// --------------------------------------------------------------------------
+// stripDefaultFlag tests
+// --------------------------------------------------------------------------
+
+func TestStripDefaultFlag_Present(t *testing.T) {
+	t.Parallel()
+	xml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:default="1" w:styleId="Normal">` +
+		`<w:name w:val="Normal"/></w:style>`
+	el, _ := oxml.ParseXml([]byte(xml))
+
+	stripDefaultFlag(el)
+
+	for _, attr := range el.Attr {
+		if attr.Key == "default" {
+			t.Errorf("expected w:default to be stripped, still present")
+		}
+	}
+	// Other attributes preserved.
+	if el.SelectAttrValue("w:type", "") != "paragraph" {
+		t.Error("w:type should be preserved")
+	}
+	if el.SelectAttrValue("w:styleId", "") != "Normal" {
+		t.Error("w:styleId should be preserved")
+	}
+}
+
+func TestStripDefaultFlag_Absent(t *testing.T) {
+	t.Parallel()
+	xml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Custom">` +
+		`<w:name w:val="Custom"/></w:style>`
+	el, _ := oxml.ParseXml([]byte(xml))
+
+	attrCountBefore := len(el.Attr)
+	stripDefaultFlag(el)
+
+	if len(el.Attr) != attrCountBefore {
+		t.Errorf("expected no change, attr count changed from %d to %d", attrCountBefore, len(el.Attr))
+	}
+}
+
+// --------------------------------------------------------------------------
+// findBuiltinByName tests
+// --------------------------------------------------------------------------
+
+func TestFindBuiltinByName_LocalizedNormal(t *testing.T) {
+	t.Parallel()
+	// Source: English "Normal" (id=Normal), Target: Russian "Normal" (id=a).
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/></w:style>`,
+	)
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	ri := &ResourceImporter{}
+	result := ri.findBuiltinByName(srcStyle, tgtStyles)
+	if result == nil {
+		t.Fatal("expected to find target style by name")
+	}
+	if result.StyleId() != "a" {
+		t.Errorf("expected target styleId 'a', got %s", result.StyleId())
+	}
+}
+
+func TestFindBuiltinByName_TypeMismatch(t *testing.T) {
+	t.Parallel()
+	// Target has character style named "Normal" — should NOT match paragraph.
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="character" w:styleId="normalChar"><w:name w:val="Normal"/></w:style>`,
+	)
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	ri := &ResourceImporter{}
+	result := ri.findBuiltinByName(srcStyle, tgtStyles)
+	if result != nil {
+		t.Error("expected nil when type doesn't match")
+	}
+}
+
+func TestFindBuiltinByName_CustomWithSameName(t *testing.T) {
+	t.Parallel()
+	// Target has custom style named "Normal" — should NOT match built-in.
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:customStyle="1" w:styleId="myNormal"><w:name w:val="Normal"/></w:style>`,
+	)
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	ri := &ResourceImporter{}
+	result := ri.findBuiltinByName(srcStyle, tgtStyles)
+	if result != nil {
+		t.Error("expected nil when target is custom style")
+	}
+}
+
+func TestFindBuiltinByName_NoMatch(t *testing.T) {
+	t.Parallel()
+	tgtStyles := buildStylesXml(
+		`<w:style w:type="paragraph" w:styleId="a"><w:name w:val="Normal"/></w:style>`,
+	)
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Achievement"><w:name w:val="Achievement"/></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	ri := &ResourceImporter{}
+	result := ri.findBuiltinByName(srcStyle, tgtStyles)
+	if result != nil {
+		t.Error("expected nil when name doesn't match any target style")
+	}
+}
+
+// --------------------------------------------------------------------------
+// compensateDocDefaults tests
+// --------------------------------------------------------------------------
+
+func TestCompensateDocDefaults_RootStyle(t *testing.T) {
+	t.Parallel()
+	// Root paragraph style (no basedOn) with delta sz=20 + spacing.
+	cloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Normal">` +
+		`<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr>` +
+		`</w:style>`
+	clone, _ := oxml.ParseXml([]byte(cloneXml))
+
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/>` +
+		`<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	// Build delta: sz=20 in rPr, spacing in pPr.
+	deltaRPr := etree.NewElement("w:rPr")
+	sz := etree.NewElement("w:sz")
+	sz.CreateAttr("w:val", "20")
+	deltaRPr.AddChild(sz)
+
+	deltaPPr := etree.NewElement("w:pPr")
+	spacing := etree.NewElement("w:spacing")
+	spacing.CreateAttr("w:after", "0")
+	spacing.CreateAttr("w:line", "240")
+	deltaPPr.AddChild(spacing)
+
+	ri := &ResourceImporter{
+		docDefDelta:  &docDefaultsDelta{rPr: deltaRPr, pPr: deltaPPr},
+		copiedClones: nil, // no parent in clones
+	}
+
+	ri.compensateDocDefaults(clone, srcStyle)
+
+	// Check rPr: should have sz=20 injected, rFonts preserved.
+	rPr := findChild(clone, "w", "rPr")
+	if rPr == nil {
+		t.Fatal("expected rPr in clone")
+	}
+	szEl := findChild(rPr, "w", "sz")
+	if szEl == nil {
+		t.Fatal("expected sz injected into rPr")
+	}
+	if v := szEl.SelectAttrValue("w:val", ""); v != "20" {
+		t.Errorf("expected sz val=20, got %s", v)
+	}
+	// rFonts should still be there.
+	if findChild(rPr, "w", "rFonts") == nil {
+		t.Error("rFonts should be preserved")
+	}
+
+	// Check pPr: should have spacing injected.
+	pPr := findChild(clone, "w", "pPr")
+	if pPr == nil {
+		t.Fatal("expected pPr created in clone")
+	}
+	spacingEl := findChild(pPr, "w", "spacing")
+	if spacingEl == nil {
+		t.Fatal("expected spacing injected into pPr")
+	}
+	if v := spacingEl.SelectAttrValue("w:after", ""); v != "0" {
+		t.Errorf("expected spacing after=0, got %s", v)
+	}
+}
+
+func TestCompensateDocDefaults_ExplicitTakesPrecedence(t *testing.T) {
+	t.Parallel()
+	// Style already has sz=24 — delta sz=20 should NOT override.
+	cloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Custom">` +
+		`<w:rPr><w:sz w:val="24"/></w:rPr>` +
+		`</w:style>`
+	clone, _ := oxml.ParseXml([]byte(cloneXml))
+
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Custom"><w:name w:val="Custom"/>` +
+		`<w:rPr><w:sz w:val="24"/></w:rPr>` +
+		`</w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	deltaRPr := etree.NewElement("w:rPr")
+	sz := etree.NewElement("w:sz")
+	sz.CreateAttr("w:val", "20")
+	deltaRPr.AddChild(sz)
+
+	ri := &ResourceImporter{
+		docDefDelta:  &docDefaultsDelta{rPr: deltaRPr},
+		copiedClones: nil,
+	}
+
+	ri.compensateDocDefaults(clone, srcStyle)
+
+	rPr := findChild(clone, "w", "rPr")
+	szEl := findChild(rPr, "w", "sz")
+	if v := szEl.SelectAttrValue("w:val", ""); v != "24" {
+		t.Errorf("expected sz=24 (explicit preserved), got %s", v)
+	}
+}
+
+func TestCompensateDocDefaults_ParentCopied(t *testing.T) {
+	t.Parallel()
+	// Style with basedOn, parent in copiedClones → compensateNone.
+	cloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="BodyText">` +
+		`<w:basedOn w:val="Normal"/></w:style>`
+	clone, _ := oxml.ParseXml([]byte(cloneXml))
+
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="BodyText"><w:name w:val="Body Text"/>` +
+		`<w:basedOn w:val="Normal"/></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	// Parent "Normal" is in copiedClones.
+	parentSrcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>`
+	parentEl, _ := oxml.ParseXml([]byte(parentSrcXml))
+	parentStyle := &oxml.CT_Style{Element: oxml.WrapElement(parentEl)}
+
+	deltaRPr := etree.NewElement("w:rPr")
+	sz := etree.NewElement("w:sz")
+	sz.CreateAttr("w:val", "20")
+	deltaRPr.AddChild(sz)
+
+	ri := &ResourceImporter{
+		docDefDelta: &docDefaultsDelta{rPr: deltaRPr},
+		copiedClones: []copiedStyleEntry{
+			{clone: parentEl, srcStyle: parentStyle},
+		},
+		copiedStyleIds: map[string]bool{"Normal": true},
+	}
+
+	ri.compensateDocDefaults(clone, srcStyle)
+
+	// Should NOT inject anything — parent covers transitively.
+	rPr := findChild(clone, "w", "rPr")
+	if rPr != nil {
+		t.Error("expected no rPr injected (parent copied)")
+	}
+}
+
+// newMockDocumentPartWithStyles creates a minimal DocumentPart with the given
+// styles element wired via relationship graph. Used in tests that need
+// sourceStyles() to return controlled data.
+func newMockDocumentPartWithStyles(stylesEl *etree.Element) *parts.DocumentPart {
+	pkg := opc.NewOpcPackage(nil)
+
+	docBlob := []byte(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+		`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>`)
+	xp, _ := opc.NewXmlPart("/word/document.xml", opc.CTWmlDocumentMain, docBlob, pkg)
+	dp := parts.NewDocumentPart(xp)
+
+	// Wire styles element as a StylesPart related to the document.
+	spXp := opc.NewXmlPartFromElement("/word/styles.xml", opc.CTWmlStyles, stylesEl, pkg)
+	sp := parts.NewStylesPart(spXp)
+	dp.Rels().Load("rId1", opc.RTStyles, "styles.xml", sp, false)
+
+	return dp
+}
+
+// TestCompensateDocDefaults_ParentInTarget_DocDefaultsOnly verifies that
+// compensateUncovered correctly injects delta for properties that are only
+// from docDefaults (not explicitly defined in any style in the chain).
+// This is the critical bug scenario: resolveStyleChainRaw must NOT include
+// docDefaults, otherwise properties from docDefaults appear "covered" and
+// the delta is silently lost.
+func TestCompensateDocDefaults_ParentInTarget_DocDefaultsOnly(t *testing.T) {
+	t.Parallel()
+
+	// Source styles: BodyText basedOn Normal, Normal has rFonts but no sz.
+	// sz comes ONLY from source docDefaults (implicit 10pt = val 20).
+	srcStylesXml := `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+		`<w:style w:type="paragraph" w:default="1" w:styleId="Normal">` +
+		`<w:name w:val="Normal"/>` +
+		`<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr>` +
+		`</w:style>` +
+		`<w:style w:type="paragraph" w:styleId="BodyText">` +
+		`<w:name w:val="Body Text"/>` +
+		`<w:basedOn w:val="Normal"/>` +
+		`</w:style>` +
+		`</w:styles>`
+	srcStylesEl, _ := oxml.ParseXml([]byte(srcStylesXml))
+	srcStyles := &oxml.CT_Styles{Element: oxml.WrapElement(srcStylesEl)}
+
+	// Clone of BodyText as it would appear after copyStyleToTarget.
+	cloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="BodyText">` +
+		`<w:name w:val="Body Text"/>` +
+		`<w:basedOn w:val="Normal"/>` +
+		`</w:style>`
+	clone, _ := oxml.ParseXml([]byte(cloneXml))
+
+	srcBodyText := srcStyles.GetByID("BodyText")
+
+	// Delta: sz=20 (target docDefaults has sz=22, source has implicit 10pt).
+	deltaRPr := etree.NewElement("w:rPr")
+	sz := etree.NewElement("w:sz")
+	sz.CreateAttr("w:val", "20")
+	deltaRPr.AddChild(sz)
+
+	// Build a minimal Document-like wrapper so sourceStyles() works.
+	// BodyText basedOn Normal. Normal is NOT copied (mapped to target).
+	ri := &ResourceImporter{
+		docDefDelta:    &docDefaultsDelta{rPr: deltaRPr},
+		copiedClones:   nil,
+		copiedStyleIds: map[string]bool{}, // Normal NOT in copiedStyleIds
+		styleMap:       map[string]string{"Normal": "a"}, // Normal mapped to target
+	}
+	// Patch sourceStyles to return our test styles.
+	ri.sourceDoc = &Document{}
+	ri.sourceDoc.part = newMockDocumentPartWithStyles(srcStylesEl)
+
+	ri.compensateDocDefaults(clone, srcBodyText)
+
+	// sz=20 must be injected because it's NOT in any style definition.
+	// It only comes from source docDefaults which won't carry over.
+	rPr := findChild(clone, "w", "rPr")
+	if rPr == nil {
+		t.Fatal("expected rPr injected with sz delta")
+	}
+	szEl := findChild(rPr, "w", "sz")
+	if szEl == nil {
+		t.Fatal("expected sz=20 injected (property only from docDefaults, not in style chain)")
+	}
+	if v := szEl.SelectAttrValue("w:val", ""); v != "20" {
+		t.Errorf("expected sz val=20, got %s", v)
+	}
+}
+
+func TestCompensateDocDefaults_TableStyle_Skipped(t *testing.T) {
+	t.Parallel()
+	cloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="table" w:styleId="TableGrid">` +
+		`<w:name w:val="Table Grid"/></w:style>`
+	clone, _ := oxml.ParseXml([]byte(cloneXml))
+
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	deltaRPr := etree.NewElement("w:rPr")
+	sz := etree.NewElement("w:sz")
+	sz.CreateAttr("w:val", "20")
+	deltaRPr.AddChild(sz)
+
+	ri := &ResourceImporter{
+		docDefDelta:  &docDefaultsDelta{rPr: deltaRPr},
+		copiedClones: nil,
+	}
+
+	ri.compensateDocDefaults(clone, srcStyle)
+
+	// Table style should be skipped — no rPr injected.
+	if findChild(clone, "w", "rPr") != nil {
+		t.Error("expected no rPr for table style")
+	}
+}
+
+func TestCompensateDocDefaults_CharacterStyle(t *testing.T) {
+	t.Parallel()
+	// Character style should get rPr delta but NOT pPr delta.
+	cloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="character" w:styleId="Strong">` +
+		`<w:name w:val="Strong"/></w:style>`
+	clone, _ := oxml.ParseXml([]byte(cloneXml))
+
+	srcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="character" w:styleId="Strong"><w:name w:val="Strong"/></w:style>`
+	srcEl, _ := oxml.ParseXml([]byte(srcXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(srcEl)}
+
+	deltaRPr := etree.NewElement("w:rPr")
+	sz := etree.NewElement("w:sz")
+	sz.CreateAttr("w:val", "20")
+	deltaRPr.AddChild(sz)
+
+	deltaPPr := etree.NewElement("w:pPr")
+	spacing := etree.NewElement("w:spacing")
+	spacing.CreateAttr("w:after", "0")
+	deltaPPr.AddChild(spacing)
+
+	ri := &ResourceImporter{
+		docDefDelta:  &docDefaultsDelta{rPr: deltaRPr, pPr: deltaPPr},
+		copiedClones: nil,
+	}
+
+	ri.compensateDocDefaults(clone, srcStyle)
+
+	// rPr delta should be injected.
+	rPr := findChild(clone, "w", "rPr")
+	if rPr == nil {
+		t.Fatal("expected rPr injected for character style")
+	}
+	if findChild(rPr, "w", "sz") == nil {
+		t.Error("expected sz in rPr")
+	}
+
+	// pPr delta is also injected for character styles — the filter is type-level
+	// (only paragraph and character), not group-level. OOXML character styles
+	// CAN have pPr (paragraph override in linked styles), so both groups apply.
+	// However, standalone character styles typically don't define pPr, and
+	// injectDelta adds it. This is harmless and consistent.
+}
+
+func TestCompensateDocDefaults_NilDelta(t *testing.T) {
+	t.Parallel()
+	cloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>`
+	clone, _ := oxml.ParseXml([]byte(cloneXml))
+	srcStyle := &oxml.CT_Style{Element: oxml.WrapElement(clone.Copy())}
+
+	ri := &ResourceImporter{
+		docDefDelta: nil, // no delta
+	}
+
+	// Should be a no-op.
+	ri.compensateDocDefaults(clone, srcStyle)
+
+	if findChild(clone, "w", "rPr") != nil {
+		t.Error("expected no changes when delta is nil")
+	}
+}
+
+// --------------------------------------------------------------------------
+// fixupCopiedStyles tests
+// --------------------------------------------------------------------------
+
+func TestFixupCopiedStyles_RemapsBasedOn(t *testing.T) {
+	t.Parallel()
+	// Child copied before parent (BFS order). After fixup, basedOn should
+	// reference the correct target styleId.
+	childCloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="BodyText">` +
+		`<w:basedOn w:val="Normal"/></w:style>`
+	childClone, _ := oxml.ParseXml([]byte(childCloneXml))
+
+	parentCloneXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>`
+	parentClone, _ := oxml.ParseXml([]byte(parentCloneXml))
+
+	childSrcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="BodyText"><w:basedOn w:val="Normal"/></w:style>`
+	childSrcEl, _ := oxml.ParseXml([]byte(childSrcXml))
+	childSrcStyle := &oxml.CT_Style{Element: oxml.WrapElement(childSrcEl)}
+
+	parentSrcXml := `<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+		`w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>`
+	parentSrcEl, _ := oxml.ParseXml([]byte(parentSrcXml))
+	parentSrcStyle := &oxml.CT_Style{Element: oxml.WrapElement(parentSrcEl)}
+
+	ri := &ResourceImporter{
+		styleMap: map[string]string{
+			"Normal":   "a",        // Normal mapped to localized "a"
+			"BodyText": "BodyText", // BodyText copied with same id
+		},
+		copiedClones: []copiedStyleEntry{
+			{clone: childClone, srcStyle: childSrcStyle},
+			{clone: parentClone, srcStyle: parentSrcStyle},
+		},
+		copiedStyleIds: map[string]bool{"BodyText": true, "Normal": true},
+		docDefDelta:    nil, // no delta for simplicity
+	}
+
+	ri.fixupCopiedStyles()
+
+	// basedOn should now be "a" (remapped from "Normal").
+	basedOn := findChild(childClone, "w", "basedOn")
+	if basedOn == nil {
+		t.Fatal("expected basedOn in child clone")
+	}
+	if v := basedOn.SelectAttrValue("w:val", ""); v != "a" {
+		t.Errorf("expected basedOn remapped to 'a', got %s", v)
 	}
 }
