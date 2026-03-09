@@ -2,6 +2,7 @@ package docx
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -4288,6 +4289,302 @@ func rcFindTextRecursive(el *etree.Element, substr string) bool {
 		stack = append(stack, node.ChildElements()...)
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Task 5: MergePastedLists tests
+// ---------------------------------------------------------------------------
+
+// rcExtractNumIds collects numId values from all list paragraphs in container,
+// in document order. Non-list paragraphs are skipped.
+func rcExtractNumIds(container *etree.Element) []int {
+	var ids []int
+	for _, child := range container.ChildElements() {
+		if child.Space == "w" && child.Tag == "p" {
+			if id := extractNumId(child); id != 0 {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+// rcSetupNumberingReturnNumId creates a numbering definition and returns
+// the actual numId assigned by the numbering part (NextNumId).
+func rcSetupNumberingReturnNumId(t *testing.T, doc *Document, abstractNumId int, numFmt string) int {
+	t.Helper()
+	np, err := doc.part.GetOrAddNumberingPart()
+	if err != nil {
+		t.Fatalf("GetOrAddNumberingPart: %v", err)
+	}
+	numbering, err := np.Numbering()
+	if err != nil {
+		t.Fatalf("Numbering: %v", err)
+	}
+
+	absNum, _ := oxml.ParseXml([]byte(
+		`<w:abstractNum xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+			`w:abstractNumId="` + strconv.Itoa(abstractNumId) + `">` +
+			`<w:nsid w:val="` + fmt.Sprintf("%08X", abstractNumId) + `"/>` +
+			`<w:lvl w:ilvl="0"><w:numFmt w:val="` + numFmt + `"/></w:lvl>` +
+			`</w:abstractNum>`,
+	))
+	numbering.InsertAbstractNum(absNum)
+
+	num, err := numbering.AddNumWithAbstractNumId(abstractNumId)
+	if err != nil {
+		t.Fatalf("AddNumWithAbstractNumId: %v", err)
+	}
+	numId, err := num.NumId()
+	if err != nil {
+		t.Fatalf("NumId: %v", err)
+	}
+	return numId
+}
+
+func TestRWC_MergePastedLists_Default_Separate(t *testing.T) {
+	t.Parallel()
+	// MergePastedLists=false + KeepSourceNumbering=true: inserted list
+	// stays separate even though abstractNums are compatible.
+	target := mustNewDoc(t)
+	tgtNumId := rcSetupNumberingReturnNumId(t, target, 100, "decimal")
+	rcInjectNumberedParagraph(t, target, tgtNumId, 0, "target item")
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingReturnNumId(t, source, 200, "decimal")
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "source item")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Options: ImportFormatOptions{
+			KeepSourceNumbering: true,
+			MergePastedLists:    false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	ids := rcExtractNumIds(body.Element())
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 list paragraphs, got %d", len(ids))
+	}
+	if ids[0] == ids[1] {
+		t.Errorf("expected different numIds (separate lists), got both %d", ids[0])
+	}
+}
+
+func TestRWC_MergePastedLists_True_MergedWithPrev(t *testing.T) {
+	t.Parallel()
+	// MergePastedLists=true + KeepSourceNumbering=true: source list gets
+	// its own abstractNum, but post-processing detects compatible adjacency
+	// and merges numIds.
+	target := mustNewDoc(t)
+	tgtNumId := rcSetupNumberingReturnNumId(t, target, 100, "decimal")
+	rcInjectNumberedParagraph(t, target, tgtNumId, 0, "target item")
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingReturnNumId(t, source, 200, "decimal")
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "source item")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Options: ImportFormatOptions{
+			KeepSourceNumbering: true,
+			MergePastedLists:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	ids := rcExtractNumIds(body.Element())
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 list paragraphs, got %d", len(ids))
+	}
+	if ids[0] != ids[1] {
+		t.Errorf("expected same numId (merged list), got %d and %d", ids[0], ids[1])
+	}
+}
+
+func TestRWC_MergePastedLists_True_IncompatibleNoMerge(t *testing.T) {
+	t.Parallel()
+	// MergePastedLists=true + KeepSourceNumbering=true, but different
+	// numFmt (bullet vs decimal) → no merge.
+	target := mustNewDoc(t)
+	tgtNumId := rcSetupNumberingReturnNumId(t, target, 100, "bullet")
+	rcInjectNumberedParagraph(t, target, tgtNumId, 0, "target bullet")
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingReturnNumId(t, source, 200, "decimal")
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "source decimal")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Options: ImportFormatOptions{
+			KeepSourceNumbering: true,
+			MergePastedLists:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	ids := rcExtractNumIds(body.Element())
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 list paragraphs, got %d", len(ids))
+	}
+	if ids[0] == ids[1] {
+		t.Errorf("expected different numIds (incompatible lists), got both %d", ids[0])
+	}
+}
+
+func TestRWC_MergePastedLists_True_NoAdjacentList(t *testing.T) {
+	t.Parallel()
+	// MergePastedLists=true, but inserted content is next to a plain paragraph → no-op.
+	target := mustNewDoc(t)
+	target.AddParagraph("plain paragraph")
+	target.AddParagraph("[<TAG>]")
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingReturnNumId(t, source, 200, "decimal")
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "source item")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Options: ImportFormatOptions{
+			KeepSourceNumbering: true,
+			MergePastedLists:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	ids := rcExtractNumIds(body.Element())
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 list paragraph, got %d", len(ids))
+	}
+}
+
+func TestRWC_MergePastedLists_True_BothEdges(t *testing.T) {
+	t.Parallel()
+	// MergePastedLists=true + KeepSourceNumbering=true, insertion between
+	// two compatible list paragraphs → all three end up with same numId.
+	target := mustNewDoc(t)
+	tgtNumId := rcSetupNumberingReturnNumId(t, target, 100, "decimal")
+	rcInjectNumberedParagraph(t, target, tgtNumId, 0, "before item")
+	target.AddParagraph("[<TAG>]")
+	rcInjectNumberedParagraph(t, target, tgtNumId, 0, "after item")
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingReturnNumId(t, source, 200, "decimal")
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "inserted item")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Options: ImportFormatOptions{
+			KeepSourceNumbering: true,
+			MergePastedLists:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	body, err := target.getBody()
+	if err != nil {
+		t.Fatalf("getBody: %v", err)
+	}
+	ids := rcExtractNumIds(body.Element())
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 list paragraphs, got %d", len(ids))
+	}
+	if ids[0] != ids[1] || ids[1] != ids[2] {
+		t.Errorf("expected all same numId (both edges merged), got %v", ids)
+	}
+}
+
+func TestRWC_MergePastedLists_True_InTable(t *testing.T) {
+	t.Parallel()
+	// MergePastedLists=true + KeepSourceNumbering=true, placeholder inside
+	// a table cell → merge should happen inside the cell.
+	target := mustNewDoc(t)
+	tgtNumId := rcSetupNumberingReturnNumId(t, target, 100, "decimal")
+
+	// Build a table with one cell containing: list paragraph + tag.
+	body := target.element.Body().RawElement()
+	tbl, _ := oxml.ParseXml([]byte(
+		`<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+			`<w:tr><w:tc>` +
+			`<w:p><w:pPr><w:numPr>` +
+			`<w:ilvl w:val="0"/><w:numId w:val="` + strconv.Itoa(tgtNumId) + `"/>` +
+			`</w:numPr></w:pPr><w:r><w:t>cell list item</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>[&lt;TAG&gt;]</w:t></w:r></w:p>` +
+			`</w:tc></w:tr></w:tbl>`,
+	))
+	rcInsertBeforeSectPr(body, tbl)
+
+	source := mustNewDoc(t)
+	srcNumId := rcSetupNumberingReturnNumId(t, source, 200, "decimal")
+	rcInjectNumberedParagraph(t, source, srcNumId, 0, "source cell item")
+
+	_, err := target.ReplaceWithContent("[<TAG>]", ContentData{
+		Source: source,
+		Options: ImportFormatOptions{
+			KeepSourceNumbering: true,
+			MergePastedLists:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceWithContent: %v", err)
+	}
+
+	// Find the tc element and check numIds inside it.
+	bodyEl, _ := target.getBody()
+	var tcEl *etree.Element
+	for _, el := range bodyEl.Element().ChildElements() {
+		if el.Space == "w" && el.Tag == "tbl" {
+			for _, tr := range el.ChildElements() {
+				if tr.Space == "w" && tr.Tag == "tr" {
+					for _, tc := range tr.ChildElements() {
+						if tc.Space == "w" && tc.Tag == "tc" {
+							tcEl = tc
+						}
+					}
+				}
+			}
+		}
+	}
+	if tcEl == nil {
+		t.Fatal("could not find tc element")
+	}
+	ids := rcExtractNumIds(tcEl)
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 list paragraphs in cell, got %d", len(ids))
+	}
+	if ids[0] != ids[1] {
+		t.Errorf("expected same numId in cell (merged), got %d and %d", ids[0], ids[1])
+	}
 }
 
 // rcInjectNumberedParagraph injects a paragraph with numPr into the source body.

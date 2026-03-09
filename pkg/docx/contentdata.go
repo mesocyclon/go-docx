@@ -101,6 +101,18 @@ type ImportFormatOptions struct {
 	//
 	// Mirrors Aspose.Words ImportFormatOptions.IgnoreHeaderFooter.
 	IgnoreHeaderFooter bool
+
+	// MergePastedLists merges inserted list paragraphs with adjacent
+	// list paragraphs in the target document when they use compatible
+	// numbering (same abstractNum definition in target numbering).
+	//
+	// When true, adjacent list paragraphs with different numId but the
+	// same abstractNumId are unified — the later paragraph adopts the
+	// earlier paragraph's numId so Word treats them as one continuous list.
+	// When false (default), inserted lists remain independent.
+	//
+	// Mirrors Aspose.Words ImportFormatOptions.MergePastedLists.
+	MergePastedLists bool
 }
 
 // ContentData describes the content to insert in place of a text placeholder.

@@ -672,9 +672,13 @@ func (d *Document) ReplaceWithContent(old string, cd ContentData) (count int, er
 	if err != nil {
 		return count, err
 	}
+	if cd.Options.MergePastedLists {
+		mergeAdjacentLists(b.Element(), d)
+	}
 
 	// 2. Headers/footers of all sections, with deduplication.
 	seen := map[*parts.StoryPart]bool{}
+	seenMerge := map[*parts.StoryPart]bool{}
 	for _, sect := range d.Sections().Iter() {
 		sectWidth := sectionBlockWidth(sect)
 		hfs := []*baseHeaderFooter{
@@ -693,6 +697,11 @@ func (d *Document) ReplaceWithContent(old string, cd ContentData) (count int, er
 			}
 			count += n
 		}
+		if cd.Options.MergePastedLists {
+			for _, hf := range hfs {
+				hf.mergeAdjacentListsDedup(d, seenMerge)
+			}
+		}
 	}
 
 	// 3. Comments.
@@ -701,8 +710,25 @@ func (d *Document) ReplaceWithContent(old string, cd ContentData) (count int, er
 		return count, err
 	}
 	count += n
+	if cd.Options.MergePastedLists {
+		d.mergeAdjacentListsInComments()
+	}
 
 	return count, nil
+}
+
+// mergeAdjacentListsInComments applies mergeAdjacentLists to each comment body.
+func (d *Document) mergeAdjacentListsInComments() {
+	if !d.part.HasCommentsPart() {
+		return
+	}
+	comments, err := d.Comments()
+	if err != nil {
+		return
+	}
+	for _, c := range comments.Iter() {
+		mergeAdjacentLists(c.BlockItemContainer.Element(), d)
+	}
 }
 
 // replaceWithContentInComments replaces tags with source document content in

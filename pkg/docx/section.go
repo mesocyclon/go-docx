@@ -503,6 +503,19 @@ func (b *baseHeaderFooter) replaceWithContentDedup(
 	}, seen)
 }
 
+// mergeAdjacentListsDedup applies mergeAdjacentLists to this header/footer
+// with StoryPart deduplication. Used by Document.ReplaceWithContent when
+// MergePastedLists is true.
+func (b *baseHeaderFooter) mergeAdjacentListsDedup(
+	doc *Document,
+	seen map[*parts.StoryPart]bool,
+) {
+	b.applyToContainerDedup(func(bic *BlockItemContainer) (int, error) {
+		mergeAdjacentLists(bic.Element(), doc)
+		return 0, nil
+	}, seen)
+}
+
 // blockItemContainer creates a BlockItemContainer backed by the header/footer
 // part's element and StoryPart. Created fresh each call to match Python's
 // property behavior (no stale cache if definition changes).
