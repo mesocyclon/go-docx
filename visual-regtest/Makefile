@@ -133,11 +133,17 @@ replace-user-mark-clean: ## Remove replace-user-mark output
 # For each .docx in replace-user-mark-batch/in/mark/, fills the template
 # and roundtrips the result through the full Docker SSIM pipeline.
 #
-#   make replace-mark-batch-run
+#   make replace-mark-batch-run                          # all variants
+#   make replace-mark-batch-run VARIANT=keep_src         # single variant
 #   make replace-mark-batch-run TAG='(<mytag>)' SSIM_THRESHOLD=0.95
+#
+# Available variants:
+#   use_dest, keep_src, keep_src_force,
+#   keep_diff, keep_diff_force, keep_num
 # ─────────────────────────────────────────────────────────────────────────
 
 TAG                        ?= (<mark>)
+VARIANT                    ?=
 REPLACE_MARK_BATCH_IMAGE   ?= replace-mark-batch-regtest
 REPLACE_MARK_BATCH_REPORT  := $(CURDIR)/replace-user-mark-batch/report
 REPLACE_MARK_BATCH_OUT     := $(CURDIR)/replace-user-mark-batch/out
@@ -166,7 +172,7 @@ replace-mark-batch-build: replace-mark-batch-check ## Build Docker image for rep
 		-f $(CURDIR)/Dockerfile \
 		$(PROJECT_ROOT)
 
-replace-mark-batch-run: replace-mark-batch-build ## Run replace-mark-batch SSIM pipeline (LAYER=replace-mark-batch)
+replace-mark-batch-run: replace-mark-batch-build ## Run replace-mark-batch SSIM pipeline (VARIANT= for single)
 	@mkdir -p $(REPLACE_MARK_BATCH_REPORT) $(REPLACE_MARK_BATCH_OUT)
 	docker run --rm \
 		-v "$(REPLACE_MARK_BATCH_REPORT):/output" \
@@ -177,10 +183,11 @@ replace-mark-batch-run: replace-mark-batch-build ## Run replace-mark-batch SSIM 
 		-e DPI=$(DPI) \
 		-e WORKERS=$(WORKERS) \
 		-e 'TAG=$(TAG)' \
+		-e 'VARIANT=$(VARIANT)' \
 		$(REPLACE_MARK_BATCH_IMAGE)
 	@echo ""
 	@echo "  Results: $(REPLACE_MARK_BATCH_OUT)/"
-	@echo "  Report:  $(REPLACE_MARK_BATCH_REPORT)/index.html"
+	@echo "  Reports: $(REPLACE_MARK_BATCH_REPORT)/<variant>/index.html"
 
 replace-mark-batch-clean: ## Remove replace-mark-batch output, report, and image
 	rm -rf $(REPLACE_MARK_BATCH_OUT) $(REPLACE_MARK_BATCH_REPORT)

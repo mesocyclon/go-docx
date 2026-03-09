@@ -30,6 +30,7 @@ case "${LAYER}" in
 esac
 
 TAG="${TAG:-(<mark>)}"
+VARIANT="${VARIANT:-}"
 
 ROUNDTRIP_BIN="/usr/local/bin/roundtrip"
 LABEL=$(echo "${LAYER}" | tr '[:lower:]' '[:upper:]')
@@ -55,6 +56,7 @@ if [ "${LAYER}" = "replace-mark-batch" ]; then
     echo " REPLACE-MARK-BATCH Visual Regression Test"
     echo "=============================================="
     echo " Tag:       ${TAG}"
+    echo " Variant:   ${VARIANT:-all}"
     echo " Threshold: ${THRESHOLD}"
     echo " DPI:       ${DPI}"
     echo " Workers:   ${WORKERS}"
@@ -75,47 +77,61 @@ if [ "${LAYER}" = "replace-mark-batch" ]; then
         exit 1
     fi
 
-    # Step 1: Generate filled documents (one per mark).
+    # Step 1: Generate filled documents into per-variant subdirs.
     mkdir -p "${GEN_DIR}"
     echo "[entrypoint] generating filled documents …"
+    VARIANT_FLAG=""
+    if [ -n "${VARIANT}" ]; then
+        VARIANT_FLAG="--variant=${VARIANT}"
+    fi
     /usr/local/bin/replace-mark-batch \
         --input="${MARK_BATCH_IN}" \
         --output="${GEN_DIR}" \
         --tag="${TAG}" \
-        --workers="${WORKERS}"
+        --workers="${WORKERS}" \
+        ${VARIANT_FLAG}
 
-    NGENERATED=$(find "${GEN_DIR}" -maxdepth 1 -iname '*.docx' | wc -l)
-    echo "[entrypoint] generated ${NGENERATED} .docx files"
-
-    if [ "${NGENERATED}" -eq 0 ]; then
-        echo "[entrypoint] ERROR: no output files were generated"
-        exit 1
-    fi
-
-    # Copy generated files to /results (bind-mounted to host out/).
+    # Copy results (preserving variant subdirs) to /results (bind-mounted).
     if [ -d /results ]; then
-        cp "${GEN_DIR}"/*.docx /results/ 2>/dev/null || true
-        cp "${GEN_DIR}"/manifest.json /results/ 2>/dev/null || true
+        cp -r "${GEN_DIR}"/*/ /results/ 2>/dev/null || true
         echo "[entrypoint] copied results to /results/"
     fi
 
-    # Step 2: SSIM comparison — mark file vs filled template.
-    #   original-dir  = mark files      (what the content should look like)
-    #   roundtrip-dir = filled templates (actual ReplaceWithContent output)
-    echo "[entrypoint] running SSIM comparison (mark vs filled template) …"
-    python3 /opt/scripts/compare_ssim.py \
-        --original-dir="${MARK_DIR}" \
-        --roundtrip-dir="${GEN_DIR}" \
-        --work-dir="${WORK_DIR}" \
-        --report="${REPORT_DIR}/index.html" \
-        --threshold="${THRESHOLD}" \
-        --dpi="${DPI}" \
-        --workers="${WORKERS}" \
-        || true
+    # Step 2: SSIM comparison per variant subdir.
+    for VDIR in "${GEN_DIR}"/*/; do
+        [ -d "${VDIR}" ] || continue
+        VNAME=$(basename "${VDIR}")
+        NGENERATED=$(find "${VDIR}" -maxdepth 1 -iname '*.docx' | wc -l)
+        echo "[entrypoint] variant ${VNAME}: ${NGENERATED} .docx files"
+
+        if [ "${NGENERATED}" -eq 0 ]; then
+            echo "[entrypoint] WARNING: no output for variant ${VNAME}, skipping"
+            continue
+        fi
+
+        VARIANT_REPORT="${REPORT_DIR}/${VNAME}"
+        mkdir -p "${VARIANT_REPORT}" "${WORK_DIR}/${VNAME}"
+
+        echo "[entrypoint] SSIM comparison for variant: ${VNAME} …"
+        python3 /opt/scripts/compare_ssim.py \
+            --original-dir="${MARK_DIR}" \
+            --roundtrip-dir="${VDIR}" \
+            --work-dir="${WORK_DIR}/${VNAME}" \
+            --report="${VARIANT_REPORT}/index.html" \
+            --threshold="${THRESHOLD}" \
+            --dpi="${DPI}" \
+            --workers="${WORKERS}" \
+            || true
+    done
 
     echo ""
     echo "=============================================="
-    echo " Report: visual-regtest/report/index.html"
+    echo " Reports:"
+    for VDIR in "${REPORT_DIR}"/*/; do
+        [ -d "${VDIR}" ] || continue
+        VNAME=$(basename "${VDIR}")
+        echo "   ${VNAME}: replace-user-mark-batch/report/${VNAME}/index.html"
+    done
     echo "=============================================="
     exit 0
 fi
