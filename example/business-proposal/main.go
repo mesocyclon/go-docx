@@ -28,8 +28,6 @@ const (
 	cSoftBlue = "4A7FB5"
 	cGreen    = "27AE60"
 	cOrange   = "E67E22"
-	cRed      = "C0392B"
-	cPurple   = "8E44AD"
 	cGray     = "666666"
 	cGrayLt   = "999999"
 	cGrayXLt  = "AAAAAA"
@@ -76,14 +74,14 @@ func configure(doc *docx.Document) {
 	p.SetModified(now)
 
 	// Page layout — A4
-	s := ok(doc.Sections().Get(0))
-	must(s.SetPageWidth(ip(docx.Mm(210).Twips())))
-	must(s.SetPageHeight(ip(docx.Mm(297).Twips())))
-	must(s.SetTopMargin(ip(docx.Cm(2.5).Twips())))
-	must(s.SetBottomMargin(ip(docx.Cm(2).Twips())))
-	must(s.SetLeftMargin(ip(docx.Cm(2.5).Twips())))
-	must(s.SetRightMargin(ip(docx.Cm(2).Twips())))
-	must(s.SetDifferentFirstPageHeaderFooter(true))
+	sect := ok(doc.Sections().Get(0))
+	must(sect.SetPageWidth(ip(docx.Mm(210).Twips())))
+	must(sect.SetPageHeight(ip(docx.Mm(297).Twips())))
+	must(sect.SetTopMargin(ip(docx.Cm(2.5).Twips())))
+	must(sect.SetBottomMargin(ip(docx.Cm(2).Twips())))
+	must(sect.SetLeftMargin(ip(docx.Cm(2.5).Twips())))
+	must(sect.SetRightMargin(ip(docx.Cm(2).Twips())))
+	must(sect.SetDifferentFirstPageHeaderFooter(true))
 
 	// Styles
 	styles := ok(doc.Styles())
@@ -99,7 +97,6 @@ func configure(doc *docx.Document) {
 	must(st.ParagraphFormat().SetSpaceAfter(ip(docx.Pt(6).Twips())))
 
 	// Header/Footer — first page empty, rest with branding
-	sect := ok(doc.Sections().Get(0))
 	ok(sect.FirstPageHeader().AddParagraph(""))
 	ok(sect.FirstPageFooter().AddParagraph(""))
 
@@ -134,14 +131,19 @@ func buildTitlePage(doc *docx.Document) {
 	emptyN(doc, 6)
 
 	// Title
-	addStyledParagraph(doc, "КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ",
-		enum.WdParagraphAlignmentCenter, "Calibri", 28, true, false, cNavy)
-
-	// Subtitle
 	p := ok(doc.AddParagraph(""))
 	must(p.SetAlignment(ap(enum.WdParagraphAlignmentCenter)))
+	r := ok(p.AddRun("КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ"))
+	must(r.Font().SetName(sp("Calibri")))
+	must(r.Font().SetSize(lp(docx.Pt(28))))
+	must(r.Font().SetBold(bp(true)))
+	must(r.Font().Color().SetRGB(rgb(cNavy)))
+
+	// Subtitle
+	p = ok(doc.AddParagraph(""))
+	must(p.SetAlignment(ap(enum.WdParagraphAlignmentCenter)))
 	must(p.ParagraphFormat().SetSpaceAfter(ip(docx.Pt(4).Twips())))
-	r := ok(p.AddRun("Commercial Proposal"))
+	r = ok(p.AddRun("Commercial Proposal"))
 	must(r.Font().SetName(sp("Calibri")))
 	must(r.Font().SetSize(lp(docx.Pt(16))))
 	must(r.Font().SetItalic(bp(true)))
@@ -855,20 +857,6 @@ func addFactRow(doc *docx.Document, label, value string) {
 
 	r = ok(p.AddRun(value))
 	must(r.Font().SetSize(lp(docx.Pt(10))))
-}
-
-func addStyledParagraph(doc *docx.Document, text string,
-	align enum.WdParagraphAlignment, font string, size float64,
-	bold, italic bool, clr string,
-) {
-	p := ok(doc.AddParagraph(""))
-	must(p.SetAlignment(ap(align)))
-	r := ok(p.AddRun(text))
-	must(r.Font().SetName(sp(font)))
-	must(r.Font().SetSize(lp(docx.Pt(size))))
-	must(r.Font().SetBold(bp(bold)))
-	must(r.Font().SetItalic(bp(italic)))
-	must(r.Font().Color().SetRGB(rgb(clr)))
 }
 
 func addSimpleParagraph(doc *docx.Document, text string, size float64,
